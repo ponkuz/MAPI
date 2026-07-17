@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+import unittest
+
+import pandas as pd
+
+from mapi.data.validation import normalize_ohlcv
+from mapi.research.backtest import compare_score_buckets, run_backtest, run_event_study
+from mapi.research.labels import forward_path_metrics
+from mapi.research.reports import render_markdown_report
+from tests.helpers import make_ohlcv
+
+
+class BacktestTests(unittest.TestCase):
+    def setUp(self) -> None:
+        raw = make_ohlcv(80, seed=90)
+        raw["close"] = 100.0 + pd.Series(range(len(raw)), dtype=float) * 0.25
+        raw["open"] = raw["close"] - 0.05
+        raw["high"] = raw["close"] + 0.20
+        raw["low"] = raw["close"] - 0.20
+        self.prices = normalize_ohlcv(raw)
+
+    def test_costs_reduce_mean_return(self) -> None:
+        signals = pd.DataFrame(
+            {"mapi_score": 100.0, "mapi_direction": 1.0}, index=self.prices.index
+        )
+        free = run_backtest(
+            signals,
+            self.prices,
+            horizon_bars=3,
+            transaction_cost_bps=0.0,
+            spread_bps=0.0,
+            slippage_bps=0.0,
+        )
+        costly = run_backtest(
+            signals,
+            self.prices,
+            horizon_bars=3,
+            transaction_cost_bps=100.0,
+            spread_bps=0.0,
+            slippage_bps=25.0,
+        )
+        self.assertEqual(free.sample_count, costly.sample_count)
+        self.assertGreater(free.mean_return, costly.mean_return)
+
+    def test_score_buckets_do_not_leak_signals(self) -> None:
+        signals = pd.DataFrame(
+            {"mapi_score": 30.0, "mapi_direction": 1.0}, index=self.prices.index
+        )
+        buckets = compare_score_buckets(
+            signals,
+            self.prices,
+            horizon_bars=2,
+            buckets=(0, 20, 40),
+            transaction_cost_bps=0.0,
+            spread_bps=0.0,
+            slippage_bps=0.0,
+        ).set_index("bucket")
+        self.assertEqual(int(buckets.loc["0-19", "sample_count"]), 0)
+        self.assertGreater(int(buckets.loc["20-39", "sample_count"]), 0)
+
+    def test_markdown_report_has_no_optional_dependency(self) -> None:
+        rows = pd.DataFrame([{"name": "mapi", "mean_return": 0.0123}])
+        report = render_markdown_report("Test", rows)
+        self.assertIn("| name | mean_return |", report)
+        self.assertIn("experimental", report.lower())
+
+    def test_hand_calculated_long_and_short_execution(self) -> None:
+        timestamps = pd.date_range("2025-01-02", periods=7, freq="B", tz="UTC")
+        close = pd.Series([100.0, 110.0, 121.0, 108.9, 100.0, 100.0, 100.0])
+        prices = normalize_ohlcv(
+            pd.DataFrame(
+                {
+                    "timestamp": timestamps,
+                    "open": close,
+                    "high": close + 0.1,
+                    "low": close - 0.1,
+                    "close": close,
+                    "volume": 1000.0,
+                }
+            )
+        )
+        labels = forward_path_metrics(prices, horizon_bars=2, signal_delay_bars=1)
+        self.assertAlmostEqual(float(labels.iloc[0]["forward_return"]), -0.01)
+        self.assertAlmostEqual(float(labels.iloc[0]["mfe"]), 0.10)
+        self.assertAlmostEqual(float(labels.iloc[0]["mae"]), -0.01)
+
+        long_signals = pd.DataFrame(
+            {"mapi_score": [100.0] + [0.0] * 6, "mapi_direction": [1.0] + [0.0] * 6},
+            index=prices.index,
+        )
+        short_signals = long_signals.copy()
+        short_signals.loc[prices.index[0], "mapi_direction"] = -1.0
+        long_metrics = run_event_study(
+            long_signals,
+            prices,
+            horizon_bars=2,
+            transaction_cost_bps=0.0,
+            spread_bps=0.0,
+            slippage_bps=0.0,
+        )
+        short_metrics = run_event_study(
+            short_signals,
+            prices,
+            horizon_bars=2,
+            transaction_cost_bps=0.0,
+            spread_bps=0.0,
+            slippage_bps=0.0,
+        )
+        self.assertAlmostEqual(long_metrics.mean_return, -0.01)
+        self.assertAlmostEqual(long_metrics.mean_mfe, 0.10)
+        self.assertAlmostEqual(long_metrics.mean_mae, -0.01)
+        self.assertAlmostEqual(short_metrics.mean_return, 0.01)
+        self.assertAlmostEqual(short_metrics.mean_mfe, 0.01)
+        self.assertAlmostEqual(short_metrics.mean_mae, -0.10)
+
+    def test_round_trip_cost_is_charged_once(self) -> None:
+        signals = pd.DataFrame(
+            {"mapi_score": 100.0, "mapi_direction": 1.0}, index=self.prices.index
+        )
+        free = run_event_study(
+            signals,
+            self.prices,
+            horizon_bars=2,
+            transaction_cost_bps=0.0,
+            spread_bps=0.0,
+            slippage_bps=0.0,
+        )
+        costly = run_event_study(
+            signals,
+            self.prices,
+            horizon_bars=2,
+            transaction_cost_bps=10.0,
+            spread_bps=20.0,
+            slippage_bps=30.0,
+        )
+        self.assertAlmostEqual(free.mean_return - costly.mean_return, 0.006)
+
+    def test_non_overlapping_event_filter_and_warning(self) -> None:
+        signals = pd.DataFrame(
+            {"mapi_score": 100.0, "mapi_direction": 1.0}, index=self.prices.index
+        )
+        metrics = run_event_study(signals, self.prices, horizon_bars=5)
+        self.assertTrue(metrics.non_overlapping)
+        self.assertGreater(metrics.overlapping_candidates_excluded, 0)
+        self.assertEqual(metrics.analysis_type, "event_study")
+        self.assertTrue(any("not realizable portfolio" in item for item in metrics.warnings))
+
+
+if __name__ == "__main__":
+    unittest.main()

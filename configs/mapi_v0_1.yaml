@@ -1,0 +1,52 @@
+signal_version: mapi_v0.1
+score_semantics: legacy_actionability
+
+enabled_components: [price_volume_divergence, stock_sector_divergence, momentum_disagreement, volatility_anomaly, market_regime_divergence]
+
+component_weights:
+  price_volume_divergence: 0.24
+  stock_sector_divergence: 0.20
+  momentum_disagreement: 0.18
+  volatility_anomaly: 0.18
+  market_regime_divergence: 0.20
+
+# Reliability priors stay neutral until out-of-sample evidence justifies a change.
+component_reliability:
+  price_volume_divergence: 1.0
+  stock_sector_divergence: 1.0
+  momentum_disagreement: 1.0
+  volatility_anomaly: 1.0
+  market_regime_divergence: 1.0
+
+horizons:
+  intraday:
+    return_window: 1
+    rolling_window: 20
+    min_periods: 8
+  short_term:
+    return_window: 5
+    rolling_window: 60
+    min_periods: 20
+  swing:
+    return_window: 20
+    rolling_window: 120
+    min_periods: 40
+  position:
+    return_window: 60
+    rolling_window: 252
+    min_periods: 80
+
+redundancy_threshold: 0.82
+redundancy_window: 80
+redundancy_min_periods: 8
+min_redundancy_penalty: 0.55
+cross_asset_max_staleness_bars: 1.5
+cross_asset_frequency_tolerance: 1.5
+high_anomaly_threshold: 40.0
+strong_anomaly_threshold: 60.0
+already_realized_penalty: 0.15
+transaction_cost_bps: 10.0
+spread_bps: 2.0
+slippage_bps: 5.0
+deterministic_seed: 42
+adjusted_prices_required: true
