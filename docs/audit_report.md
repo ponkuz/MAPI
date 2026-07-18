@@ -1,4 +1,4 @@
-# MAPI v0.2 to v0.3.2 targeted source audit
+# MAPI v0.2 to v0.3.3 targeted source audit
 
 This source audit does not establish profitability. No parameter was tuned against the final test set. Each item below records the confirmed finding, changed files, regression coverage, behavioral change, compatibility effect, and remaining methodological uncertainty.
 
@@ -249,7 +249,7 @@ This source audit does not establish profitability. No parameter was tuned again
 
 - **Confirmed:** regime weighting, forecast mappings, explanation fields, and event metadata materially changed behavior and serialization after r2.
 - **Files/lines:** `mapi/version.py:3-5`; `pyproject.toml:3`; `configs/mapi_v0_3.yaml:1`; `mapi/models.py:129-133,263-271`; `tests/test_edge_cases.py:58-91`; `tests/test_scoring.py:17-35`.
-- **Regression tests:** the historical r3 schema check is superseded by `test_json_output_contains_v032_schema`; `test_scores_are_bounded_and_serializable`; `test_legacy_public_score_selector_does_not_relabel_algorithm`.
+- **Regression tests:** the historical r3 schema check is superseded by `test_json_output_contains_v033_schema`; `test_scores_are_bounded_and_serializable`; `test_legacy_public_score_selector_does_not_relabel_algorithm`.
 - **Before/after:** package implementation is `0.3.1`, algorithm revision is `mapi_v0.3_source_audit_r3`, and data contract is `mapi_signal_v0.3.1`; config fingerprint remains distinct.
 - **Compatibility:** consumers validating exact versions or schemas must accept the new identifiers and fields. Legacy YAML `signal_version` input still cannot relabel actual output.
 - **Uncertainty:** r3 implementation commit `1433fe1d7c811a0cf6e0be8a22a6e7395e2626e5` completed the green Python 3.12/3.13 matrix in GitHub Actions run `29638531915`; future dependency and platform changes remain outside that evidence.
@@ -303,11 +303,21 @@ This source audit does not establish profitability. No parameter was tuned again
 
 - **Confirmed:** subtype semantics, serialized directional capacity, and aggregate forecast-direction behavior materially change r3 behavior and the v0.3.1 data contract.
 - **Files/lines:** `mapi/version.py:3-5`; `pyproject.toml:3`; `configs/mapi_v0_3.yaml:1`; `mapi/models.py:39-100`; `mapi/scoring.py:197-286,406-477`; `tests/test_scoring.py:58-76,176-205`.
-- **Regression tests:** `test_json_output_contains_v032_schema`, version/schema assertions in `test_scores_are_bounded_and_serializable`, plus the component and aggregate direction tests in sections 29-32.
+- **Regression tests:** the r4 schema check is superseded by `test_json_output_contains_v033_schema`, plus the component and aggregate direction tests in sections 29-32.
 - **Before/after:** implementation is `0.3.2`, algorithm revision is `mapi_v0.3_source_audit_r4`, and data contract is `mapi_signal_v0.3.2`.
 - **Compatibility:** exact-version and schema consumers must accept the new identifiers and `directional_evidence_strength`; `mapi_direction_semantics` now names the no-view-excluding aggregate formula.
 - **Verification:** local Python 3.13 completed `unittest` 91/91, `pytest` 91 plus 40 subtests, CLI end-to-end 1/1, and configuration validation 7/7. Implementation commit `081f68a856f6c6ce17cdad01aa00e0122e1420a0` completed the green Python 3.12/3.13 matrix, including `unittest`, `pytest`, both CLI paths, and configuration validation, in GitHub Actions run `29644871013`.
 - **Uncertainty:** local and CI tests cover the declared contracts but do not demonstrate profitability, out-of-sample edge, or correctness under future dependency changes.
+
+## 35. Momentum zero-forecast direction capacity
+
+- **Confirmed:** a nonzero momentum timescale disagreement could set `directional_evidence_strength=1` while `short_signal=0` made `forecast_direction=0`, allowing a no-view component back into the aggregate direction denominator.
+- **Files/lines:** `mapi/components/base.py:12,68-123`; `mapi/components/momentum_disagreement.py:61-76,143-196`; `mapi/scoring.py:406-466`; `tests/test_components.py:158-174,196-284,326-371`; `tests/test_scoring.py:182-219`.
+- **Regression tests:** `test_zero_short_term_momentum_has_no_directional_capacity`; `test_inconsistent_direction_contract_fails_fast`; `test_sub_epsilon_direction_is_normalized_to_exact_zero`; the bidirectional invariant in `test_enabled_components_define_explicit_direction_contracts`; `test_zero_forecast_momentum_does_not_dilute_bullish_direction`.
+- **Before/after:** timescale disagreement is directional only when its computed forecast magnitude exceeds the technical `1e-12` epsilon. Sub-epsilon values are normalized to exact zero. A zero forecast now emits `direction_neutral_momentum_disagreement_without_forecast` with zero capacity. Component finalization fails fast unless forecast direction and directional capacity are jointly zero or jointly nonzero beyond the same epsilon.
+- **Compatibility:** inconsistent external component plugins now raise `ValueError` instead of silently diluting aggregate direction. Legacy plugins that omit capacity derive it with the same epsilon. Output identity is implementation `0.3.3`, algorithm `mapi_v0.3_source_audit_r5`, and data contract `mapi_signal_v0.3.3`. Aggregate direction semantics now explicitly say `novelty_adjusted` because the formula weights component direction by recurrence-adjusted alert contribution.
+- **Remaining methodological uncertainty:** the epsilon is a numerical contract boundary, not a fitted market threshold. Alert-weighted direction can still suppress persistent recurrent directional intensity by design. Separate intensity direction, directional trade actionability, and multi-subtype price-volume output remain non-blocking future research choices.
+- **Verification:** local Python 3.13 completed `unittest` 95/95, `pytest` 95 plus 42 subtests, CLI end-to-end 1/1, and configuration validation 7/7. A completed Python 3.12/3.13 CI matrix is still required before r5 can be described as cross-version verified.
 
 ## Remaining system-level limits
 

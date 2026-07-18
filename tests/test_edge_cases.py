@@ -57,7 +57,7 @@ class EdgeCaseTests(unittest.TestCase):
         self.assertEqual(normalized.index[0].hour, 21)
         self.assertEqual(normalized.index[1].hour, 20)
 
-    def test_json_output_contains_v032_schema(self) -> None:
+    def test_json_output_contains_v033_schema(self) -> None:
         payload = calculate_latest_mapi(
             "TEST", make_ohlcv(100), config=small_config(include_cross_asset=False)
         )["mapi_short_term"]

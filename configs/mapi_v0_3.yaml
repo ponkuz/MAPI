@@ -1,4 +1,4 @@
-signal_version: mapi_v0.3_source_audit_r4
+signal_version: mapi_v0.3_source_audit_r5
 score_semantics: intensity
 research_score_column: mapi_actionability_score
 research_fit_fraction: 0.70

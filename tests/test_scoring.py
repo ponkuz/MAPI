@@ -185,7 +185,8 @@ class ScoringTests(unittest.TestCase):
         self.assertAlmostEqual(float(latest["mapi_forecast_direction"]), 1.0)
         self.assertEqual(
             latest["mapi_direction_semantics"],
-            "weighted_component_forecast_direction_excluding_no_view",
+            "novelty_adjusted_weighted_component_forecast_direction_"
+            "excluding_no_view",
         )
         serialized = latest["signal"].to_dict()["anomaly_components"]
         self.assertEqual(serialized[0]["directional_evidence_strength"], 1.0)
@@ -201,6 +202,21 @@ class ScoringTests(unittest.TestCase):
         frame = self._score_fixed_components([bullish, bearish])
         self.assertAlmostEqual(
             float(frame["mapi_forecast_direction"].iloc[-1]), 0.0
+        )
+
+    def test_zero_forecast_momentum_does_not_dilute_bullish_direction(self) -> None:
+        bullish = _FixedDirectionComponent(
+            "bullish", 1.0, 1.0, "continuation_hypothesis_test_bullish"
+        )
+        momentum_no_view = _FixedDirectionComponent(
+            "momentum_no_view",
+            0.0,
+            0.0,
+            "direction_neutral_momentum_disagreement_without_forecast",
+        )
+        frame = self._score_fixed_components([bullish, momentum_no_view])
+        self.assertAlmostEqual(
+            float(frame["mapi_forecast_direction"].iloc[-1]), 1.0
         )
 
     def _score_fixed_components(

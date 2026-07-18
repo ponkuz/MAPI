@@ -410,7 +410,8 @@ def _score_horizon(
             mapi_forecast_direction=forecast_direction,
             mapi_observed_pressure=observed_pressure,
             mapi_direction_semantics=(
-                "weighted_component_forecast_direction_excluding_no_view"
+                "novelty_adjusted_weighted_component_forecast_direction_"
+                "excluding_no_view"
             ),
             mapi_confidence=confidence,
             mapi_regime=current_regime,
@@ -458,7 +459,8 @@ def _score_horizon(
                 "mapi_forecast_direction": forecast_direction,
                 "mapi_observed_pressure": observed_pressure,
                 "mapi_direction_semantics": (
-                    "weighted_component_forecast_direction_excluding_no_view"
+                    "novelty_adjusted_weighted_component_forecast_direction_"
+                    "excluding_no_view"
                 ),
                 "mapi_confidence": confidence,
                 "mapi_regime": current_regime,

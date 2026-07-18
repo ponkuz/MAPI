@@ -9,6 +9,9 @@ from mapi.config import MapiConfig
 from mapi.models import HorizonConfig
 
 
+DIRECTION_EPSILON = 1e-12
+
+
 @dataclass
 class ComponentContext:
     symbol: str
@@ -67,7 +70,7 @@ def finalize_component_frame(
         fallback_fields.append("observed_pressure")
     if "directional_evidence_strength" not in output:
         output["directional_evidence_strength"] = (
-            output["forecast_direction"].astype(float).abs() > 0.0
+            output["forecast_direction"].astype(float).abs() > DIRECTION_EPSILON
         ).astype(float)
         fallback_fields.append("directional_evidence_strength")
     output["direction"] = output["forecast_direction"]
@@ -91,12 +94,31 @@ def finalize_component_frame(
             upper=1.0,
         )
         output[column] = output[column].fillna(0.0)
+    output.loc[
+        output["forecast_direction"].abs() <= DIRECTION_EPSILON,
+        "forecast_direction",
+    ] = 0.0
+    output.loc[
+        output["directional_evidence_strength"] <= DIRECTION_EPSILON,
+        "directional_evidence_strength",
+    ] = 0.0
+    output["direction"] = output["forecast_direction"]
     if "direction_semantics" not in output:
         output["direction_semantics"] = "deprecated_implicit_direction_fallback"
         fallback_fields.append("direction_semantics")
     output["direction_semantics"] = output["direction_semantics"].fillna(
         "deprecated_implicit_direction_fallback"
     ).astype(str)
+    has_forecast = output["forecast_direction"].abs() > DIRECTION_EPSILON
+    has_directional_evidence = (
+        output["directional_evidence_strength"] > DIRECTION_EPSILON
+    )
+    invalid_direction_contract = has_forecast != has_directional_evidence
+    if invalid_direction_contract.any():
+        raise ValueError(
+            "Component direction contract requires forecast_direction and "
+            "directional_evidence_strength to be jointly zero or jointly nonzero"
+        )
     if "direction_contract_warning" not in output:
         warning = (
             "Legacy component direction fallback populated: "

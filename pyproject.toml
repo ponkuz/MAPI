@@ -1,6 +1,6 @@
 [project]
 name = "stock-ai-scout-mapi"
-version = "0.3.2"
+version = "0.3.3"
 description = "Experimental Market Anomaly Pressure Index (MAPI) research module for Stock AI Scout."
 requires-python = ">=3.12"
 dependencies = [

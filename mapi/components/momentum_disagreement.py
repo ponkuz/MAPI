@@ -3,7 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from mapi.components.base import ComponentContext, finalize_component_frame
+from mapi.components.base import (
+    DIRECTION_EPSILON,
+    ComponentContext,
+    finalize_component_frame,
+)
 from mapi.config import MapiConfig
 from mapi.models import HorizonConfig
 from mapi.normalization import event_novelty, historical_zscore, signed_unit_from_z
@@ -59,44 +63,16 @@ class MomentumDisagreement:
         observed_pressure = (
             (short_signal * 0.65) + (medium_signal * 0.35)
         ).clip(-1.0, 1.0)
-        timescale_evidence = timescale_disagreement > 0.0
-        timescale_forecast = (
-            short_signal * timescale_disagreement
-        ).where(timescale_evidence, 0.0).clip(-1.0, 1.0)
-        forecast_direction = pd.Series(
-            np.select(
-                [new_high_nonconfirm > 0.0, new_low_nonconfirm > 0.0],
-                [-nonconfirmation, nonconfirmation],
-                default=timescale_forecast,
-            ),
-            index=price_frame.index,
-            dtype=float,
-        ).clip(-1.0, 1.0)
-        directional_evidence_strength = pd.Series(
-            np.select(
-                [
-                    new_high_nonconfirm > 0.0,
-                    new_low_nonconfirm > 0.0,
-                    timescale_evidence,
-                ],
-                [1.0, 1.0, 1.0],
-                default=0.0,
-            ),
-            index=price_frame.index,
-            dtype=float,
-        )
-        direction_semantics = np.select(
-            [
-                new_high_nonconfirm > 0.0,
-                new_low_nonconfirm > 0.0,
-                timescale_evidence,
-            ],
-            [
-                "reversal_hypothesis_bearish_new_high_nonconfirmation",
-                "reversal_hypothesis_bullish_new_low_nonconfirmation",
-                "continuation_hypothesis_short_term_momentum_dominance",
-            ],
-            default="direction_neutral_momentum_alignment",
+        (
+            forecast_direction,
+            directional_evidence_strength,
+            direction_semantics,
+        ) = _momentum_direction_contract(
+            new_high_nonconfirm=new_high_nonconfirm,
+            new_low_nonconfirm=new_low_nonconfirm,
+            nonconfirmation=nonconfirmation,
+            short_signal=short_signal,
+            timescale_disagreement=timescale_disagreement,
         )
         coverage = close.rolling(horizon.rolling_window, min_periods=1).count() / float(
             horizon.rolling_window
@@ -162,6 +138,62 @@ class MomentumDisagreement:
             index=price_frame.index,
         )
         return finalize_component_frame(frame, price_frame.index, "Momentum disagreement")
+
+
+def _momentum_direction_contract(
+    new_high_nonconfirm: pd.Series,
+    new_low_nonconfirm: pd.Series,
+    nonconfirmation: pd.Series,
+    short_signal: pd.Series,
+    timescale_disagreement: pd.Series,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    timescale_evidence = timescale_disagreement > 0.0
+    timescale_forecast = (
+        short_signal * timescale_disagreement
+    ).where(timescale_evidence, 0.0).clip(-1.0, 1.0)
+    timescale_directional = timescale_forecast.abs() > DIRECTION_EPSILON
+    forecast_direction = pd.Series(
+        np.select(
+            [new_high_nonconfirm > 0.0, new_low_nonconfirm > 0.0],
+            [-nonconfirmation, nonconfirmation],
+            default=timescale_forecast,
+        ),
+        index=short_signal.index,
+        dtype=float,
+    ).clip(-1.0, 1.0)
+    directional_evidence_strength = pd.Series(
+        np.select(
+            [
+                new_high_nonconfirm > 0.0,
+                new_low_nonconfirm > 0.0,
+                timescale_directional,
+            ],
+            [1.0, 1.0, 1.0],
+            default=0.0,
+        ),
+        index=short_signal.index,
+        dtype=float,
+    )
+    direction_semantics = pd.Series(
+        np.select(
+            [
+                new_high_nonconfirm > 0.0,
+                new_low_nonconfirm > 0.0,
+                timescale_directional,
+                timescale_evidence,
+            ],
+            [
+                "reversal_hypothesis_bearish_new_high_nonconfirmation",
+                "reversal_hypothesis_bullish_new_low_nonconfirmation",
+                "continuation_hypothesis_short_term_momentum_dominance",
+                "direction_neutral_momentum_disagreement_without_forecast",
+            ],
+            default="direction_neutral_momentum_alignment",
+        ),
+        index=short_signal.index,
+        dtype=object,
+    )
+    return forecast_direction, directional_evidence_strength, direction_semantics
 
 
 def _prior_extreme_momentum(

@@ -4,9 +4,16 @@ import unittest
 
 import pandas as pd
 
-from mapi.components.base import ComponentContext, finalize_component_frame
+from mapi.components.base import (
+    DIRECTION_EPSILON,
+    ComponentContext,
+    finalize_component_frame,
+)
 from mapi.components.market_regime import MarketRegimeDivergence
-from mapi.components.momentum_disagreement import MomentumDisagreement
+from mapi.components.momentum_disagreement import (
+    MomentumDisagreement,
+    _momentum_direction_contract,
+)
 from mapi.components.price_volume import (
     PriceVolumeDivergence,
     _price_volume_direction_contract,
@@ -148,6 +155,23 @@ class ComponentTests(unittest.TestCase):
             ],
         )
 
+    def test_zero_short_term_momentum_has_no_directional_capacity(self) -> None:
+        index = pd.RangeIndex(1)
+        zero = pd.Series(0.0, index=index)
+        direction, capacity, semantics = _momentum_direction_contract(
+            new_high_nonconfirm=zero,
+            new_low_nonconfirm=zero,
+            nonconfirmation=zero,
+            short_signal=zero,
+            timescale_disagreement=pd.Series(0.5, index=index),
+        )
+        self.assertEqual(float(direction.iloc[0]), 0.0)
+        self.assertEqual(float(capacity.iloc[0]), 0.0)
+        self.assertEqual(
+            semantics.iloc[0],
+            "direction_neutral_momentum_disagreement_without_forecast",
+        )
+
     def test_high_volume_decline_is_directionally_confirmed_flow(self) -> None:
         raw = make_ohlcv(90, seed=77)
         previous_close = float(raw.loc[len(raw) - 2, "close"])
@@ -201,6 +225,7 @@ class ComponentTests(unittest.TestCase):
                 "reversal_hypothesis_bearish_new_high_nonconfirmation",
                 "reversal_hypothesis_bullish_new_low_nonconfirmation",
                 "continuation_hypothesis_short_term_momentum_dominance",
+                "direction_neutral_momentum_disagreement_without_forecast",
                 "direction_neutral_momentum_alignment",
             },
             "volatility_anomaly": {
@@ -239,6 +264,17 @@ class ComponentTests(unittest.TestCase):
                 )
                 self.assertTrue(
                     result["directional_evidence_strength"].between(0.0, 1.0).all()
+                )
+                has_forecast = (
+                    result["forecast_direction"].abs() > DIRECTION_EPSILON
+                )
+                has_directional_evidence = (
+                    result["directional_evidence_strength"] > DIRECTION_EPSILON
+                )
+                pd.testing.assert_series_equal(
+                    has_forecast,
+                    has_directional_evidence,
+                    check_names=False,
                 )
                 neutral = result["direction_semantics"].str.startswith(
                     "direction_neutral_"
@@ -286,6 +322,50 @@ class ComponentTests(unittest.TestCase):
                 regex=False,
             ).all()
         )
+
+    def test_inconsistent_direction_contract_fails_fast(self) -> None:
+        for forecast_direction, capacity in ((0.0, 1.0), (0.5, 0.0)):
+            with self.subTest(
+                forecast_direction=forecast_direction, capacity=capacity
+            ):
+                invalid = pd.DataFrame(
+                    {
+                        "anomaly_strength": 0.5,
+                        "forecast_direction": forecast_direction,
+                        "observed_pressure": forecast_direction,
+                        "directional_evidence_strength": capacity,
+                        "direction_semantics": "continuation_hypothesis_test",
+                        "confidence": 1.0,
+                        "novelty": 1.0,
+                    },
+                    index=self.prices.index,
+                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "forecast_direction and directional_evidence_strength",
+                ):
+                    finalize_component_frame(
+                        invalid, self.prices.index, "invalid component"
+                    )
+
+    def test_sub_epsilon_direction_is_normalized_to_exact_zero(self) -> None:
+        near_zero = pd.DataFrame(
+            {
+                "anomaly_strength": 0.5,
+                "forecast_direction": DIRECTION_EPSILON / 2.0,
+                "observed_pressure": 0.0,
+                "directional_evidence_strength": 0.0,
+                "direction_semantics": "direction_neutral_test",
+                "confidence": 1.0,
+                "novelty": 1.0,
+            },
+            index=self.prices.index,
+        )
+        result = finalize_component_frame(
+            near_zero, self.prices.index, "near-zero component"
+        )
+        self.assertTrue((result["forecast_direction"] == 0.0).all())
+        self.assertTrue((result["direction"] == 0.0).all())
 
 
 if __name__ == "__main__":
