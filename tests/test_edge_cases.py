@@ -57,7 +57,7 @@ class EdgeCaseTests(unittest.TestCase):
         self.assertEqual(normalized.index[0].hour, 21)
         self.assertEqual(normalized.index[1].hour, 20)
 
-    def test_json_output_contains_v02_schema(self) -> None:
+    def test_json_output_contains_v031_schema(self) -> None:
         payload = calculate_latest_mapi(
             "TEST", make_ohlcv(100), config=small_config(include_cross_asset=False)
         )["mapi_short_term"]
@@ -65,7 +65,12 @@ class EdgeCaseTests(unittest.TestCase):
             "mapi_score",
             "mapi_raw_score",
             "mapi_actionability_score",
+            "mapi_intensity_score",
+            "mapi_novelty_score",
+            "mapi_alert_score",
             "mapi_direction",
+            "mapi_forecast_direction",
+            "mapi_observed_pressure",
             "mapi_confidence",
             "data_quality_score",
             "ohlcv_quality_score",
@@ -78,9 +83,15 @@ class EdgeCaseTests(unittest.TestCase):
             "regime_confidence",
             "horizon_frequency_compatible",
             "anomaly_components",
+            "dominant_intensity_anomalies",
+            "dominant_alert_anomalies",
             "machine_reasons",
             "human_summary",
             "signal_version",
+            "implementation_version",
+            "algorithm_revision",
+            "data_contract_version",
+            "config_fingerprint",
         }
         self.assertTrue(required.issubset(payload))
         json.dumps(payload, allow_nan=False)

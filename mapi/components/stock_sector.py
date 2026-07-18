@@ -59,8 +59,8 @@ class StockSectorDivergence:
         expected_return = alpha + beta * sector_return
         residual = stock_return - expected_return
         residual_z = historical_zscore(residual, horizon.rolling_window, horizon.min_periods)
-        strength = (residual_z.abs() / 3.0).clip(0.0, 1.0)
-        direction = signed_unit_from_z(residual_z, scale=2.0)
+        residual_strength = (residual_z.abs() / 3.0).clip(0.0, 1.0)
+        observed_pressure = signed_unit_from_z(residual_z, scale=2.0)
         corr = stock_return.rolling(
             horizon.rolling_window, min_periods=horizon.min_periods
         ).corr(sector_return)
@@ -68,7 +68,23 @@ class StockSectorDivergence:
             horizon.rolling_window, min_periods=horizon.min_periods
         ).median().shift(1)
         corr_breakdown = (historical_corr_baseline - corr.abs()).clip(0.0, 1.0)
-        strength = pd.concat([strength, corr_breakdown * 0.65], axis=1).max(axis=1)
+        correlation_strength = corr_breakdown * 0.65
+        strength = pd.concat([residual_strength, correlation_strength], axis=1).max(axis=1)
+        residual_forecast = (
+            (residual_z.abs() > 1.2) & (residual_strength >= correlation_strength)
+        )
+        forecast_direction = observed_pressure.where(residual_forecast, 0.0)
+        direction_semantics = np.select(
+            [
+                (correlation_strength > residual_strength) & (corr_breakdown > 0.0),
+                residual_forecast,
+            ],
+            [
+                "direction_neutral_correlation_breakdown",
+                "continuation_hypothesis_beta_adjusted_residual",
+            ],
+            default="direction_neutral_insufficient_residual_evidence",
+        )
         confidence = (
             alignment.valid.rolling(horizon.rolling_window, min_periods=1).mean()
             * beta.notna().astype(float).replace(0.0, 0.25)
@@ -127,7 +143,11 @@ class StockSectorDivergence:
         frame = pd.DataFrame(
             {
                 "anomaly_strength": strength,
-                "direction": direction,
+                "direction": forecast_direction,
+                "forecast_direction": forecast_direction,
+                "observed_pressure": observed_pressure,
+                "direction_semantics": direction_semantics,
+                "direction_contract_warning": None,
                 "confidence": confidence,
                 "novelty": novelty["novelty"].fillna(0.0),
                 "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),

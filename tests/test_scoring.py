@@ -124,6 +124,13 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(float(latest["mapi_actionability_score"]), 0.0)
         self.assertEqual(latest["anomaly_state"], "confirmed")
         self.assertGreater(int(latest["anomaly_age_bars"]), 1)
+        self.assertTrue(latest["dominant_intensity_anomalies"])
+        self.assertEqual(latest["dominant_alert_anomalies"], [])
+        self.assertEqual(
+            latest["dominant_anomalies"],
+            latest["dominant_intensity_anomalies"],
+        )
+        self.assertIn("no longer novel", latest["human_summary"])
 
 
 if __name__ == "__main__":

@@ -54,6 +54,7 @@ class ComponentSignal:
     historical_extremeness: float
     recurrence_rate: float
     redundancy_penalty: float
+    direction_contract_warning: str | None = None
     reason: str = ""
     metrics: dict[str, Any] = field(default_factory=dict)
     weight_factors: dict[str, float] = field(default_factory=dict)
@@ -87,6 +88,7 @@ class ComponentSignal:
                 "forecast_direction": clamp(self.direction, -1.0, 1.0),
                 "observed_pressure": clamp(self.observed_pressure, -1.0, 1.0),
                 "direction_semantics": self.direction_semantics,
+                "direction_contract_warning": self.direction_contract_warning,
                 "confidence": clamp(self.confidence, 0.0, 1.0),
                 "weight": clamp(self.weight, 0.0, 1.0),
                 "novelty": clamp(self.novelty, 0.0, 1.0),
@@ -126,6 +128,8 @@ class MapiSignal:
     regime_confidence: float
     anomaly_components: list[ComponentSignal]
     dominant_anomalies: list[str]
+    dominant_intensity_anomalies: list[str]
+    dominant_alert_anomalies: list[str]
     data_quality_score: float
     ohlcv_quality_score: float
     evidence_coverage_score: float
@@ -187,6 +191,8 @@ class MapiSignal:
                     component.to_dict() for component in self.anomaly_components
                 ],
                 "dominant_anomalies": self.dominant_anomalies,
+                "dominant_intensity_anomalies": self.dominant_intensity_anomalies,
+                "dominant_alert_anomalies": self.dominant_alert_anomalies,
                 "data_quality_score": round(clamp(self.data_quality_score, 0.0, 1.0), 4),
                 "ohlcv_quality_score": round(
                     clamp(self.ohlcv_quality_score, 0.0, 1.0), 4
@@ -258,6 +264,10 @@ class BacktestMetrics:
     excluded_low_confidence_count: int = 0
     excluded_low_quality_count: int = 0
     excluded_frequency_mismatch_count: int = 0
+    evaluation_count: int = 0
+    evaluation_start: Any | None = None
+    evaluation_end: Any | None = None
+    selected_event_timestamps: list[Any] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property

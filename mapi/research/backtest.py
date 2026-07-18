@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from mapi.config import MapiConfig
 from mapi.data.validation import normalize_ohlcv
 from mapi.models import BacktestMetrics
 from mapi.research.labels import forward_path_metrics
@@ -51,6 +52,9 @@ def run_event_study(
         if evaluation_mask is not None
         else pd.Series(True, index=prices.index)
     )
+    evaluation_index = prices.index[evaluation.to_numpy()]
+    evaluation_start = evaluation_index[0] if len(evaluation_index) else None
+    evaluation_end = evaluation_index[-1] if len(evaluation_index) else None
     exclusions = candidate_exclusions(
         aligned,
         score_column,
@@ -148,6 +152,10 @@ def run_event_study(
             excluded_low_confidence_count=exclusions.low_confidence,
             excluded_low_quality_count=exclusions.low_quality,
             excluded_frequency_mismatch_count=exclusions.frequency_mismatch,
+            evaluation_count=int(evaluation.sum()),
+            evaluation_start=evaluation_start,
+            evaluation_end=evaluation_end,
+            selected_event_timestamps=[],
             warnings=warnings,
         )
 
@@ -246,6 +254,10 @@ def run_event_study(
         excluded_low_confidence_count=exclusions.low_confidence,
         excluded_low_quality_count=exclusions.low_quality,
         excluded_frequency_mismatch_count=exclusions.frequency_mismatch,
+        evaluation_count=int(evaluation.sum()),
+        evaluation_start=evaluation_start,
+        evaluation_end=evaluation_end,
+        selected_event_timestamps=list(trades.index),
         warnings=warnings,
     )
 
@@ -298,6 +310,44 @@ def run_backtest(
         direction_column=direction_column,
         selection_mask=selection_mask,
     )
+
+
+def run_configured_event_study(
+    signals: pd.DataFrame,
+    price_frame: pd.DataFrame,
+    config: MapiConfig,
+    horizon_name: str,
+    name: str = "mapi",
+    score_threshold: float = 60.0,
+    min_direction: float = 0.10,
+    **overrides: object,
+) -> BacktestMetrics:
+    """Run the event study with the same evidence policy used by the CLI."""
+
+    config.validate()
+    if horizon_name not in config.horizons:
+        raise ValueError(f"Unknown horizon: {horizon_name}")
+    options: dict[str, object] = {
+        "horizon_bars": config.horizons[horizon_name].return_window,
+        "name": name,
+        "score_threshold": score_threshold,
+        "min_direction": min_direction,
+        "transaction_cost_bps": config.transaction_cost_bps,
+        "spread_bps": config.spread_bps,
+        "slippage_bps": config.slippage_bps,
+        "score_column": config.research_score_column,
+        "large_move_threshold": config.large_move_threshold,
+        "bootstrap_samples": config.bootstrap_samples,
+        "bootstrap_seed": config.deterministic_seed,
+        "min_confidence": config.research_min_confidence,
+        "min_data_quality": config.research_min_data_quality,
+        "require_frequency_compatible": (
+            config.research_require_frequency_compatible
+        ),
+        "direction_column": "mapi_forecast_direction",
+    }
+    options.update(overrides)
+    return run_event_study(signals, price_frame, **options)  # type: ignore[arg-type]
 
 
 def compare_score_buckets(

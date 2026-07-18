@@ -4,8 +4,15 @@ import unittest
 
 import pandas as pd
 
+from mapi.config import MapiConfig
 from mapi.data.validation import normalize_ohlcv
-from mapi.research.backtest import compare_score_buckets, run_backtest, run_event_study
+from mapi.models import HorizonConfig
+from mapi.research.backtest import (
+    compare_score_buckets,
+    run_backtest,
+    run_configured_event_study,
+    run_event_study,
+)
 from mapi.research.labels import forward_path_metrics
 from mapi.research.reports import render_markdown_report
 from tests.helpers import make_ohlcv
@@ -248,6 +255,63 @@ class BacktestTests(unittest.TestCase):
         self.assertGreater(metrics.overlapping_candidates_excluded, 0)
         self.assertEqual(metrics.analysis_type, "event_study")
         self.assertTrue(any("not realizable portfolio" in item for item in metrics.warnings))
+
+    def test_event_study_uses_explicit_forecast_direction_only(self) -> None:
+        signals = pd.DataFrame(
+            {
+                "mapi_score": 100.0,
+                "mapi_direction": 1.0,
+                "mapi_forecast_direction": 0.0,
+            },
+            index=self.prices.index,
+        )
+        forecast = run_event_study(
+            signals,
+            self.prices,
+            horizon_bars=2,
+            direction_column="mapi_forecast_direction",
+        )
+        legacy = run_event_study(
+            signals,
+            self.prices,
+            horizon_bars=2,
+            direction_column="mapi_direction",
+        )
+        self.assertEqual(forecast.sample_count, 0)
+        self.assertGreater(legacy.sample_count, 0)
+
+    def test_configured_event_study_applies_cli_evidence_policy(self) -> None:
+        signals = pd.DataFrame(
+            {
+                "mapi_actionability_score": 100.0,
+                "mapi_direction": 1.0,
+                "mapi_forecast_direction": 1.0,
+                "mapi_confidence": 1.0,
+                "data_quality_score": 1.0,
+                "horizon_frequency_compatible": False,
+            },
+            index=self.prices.index,
+        )
+        permissive = run_event_study(
+            signals,
+            self.prices,
+            horizon_bars=2,
+            score_column="mapi_actionability_score",
+            direction_column="mapi_forecast_direction",
+        )
+        config = MapiConfig()
+        config.horizons = {
+            "test": HorizonConfig(
+                "test", 2, 20, 8, expected_frequency="daily"
+            )
+        }
+        config.bootstrap_samples = 50
+        configured = run_configured_event_study(
+            signals, self.prices, config, "test"
+        )
+        self.assertGreater(permissive.sample_count, 0)
+        self.assertEqual(configured.sample_count, 0)
+        self.assertGreater(configured.excluded_frequency_mismatch_count, 0)
 
 
 if __name__ == "__main__":

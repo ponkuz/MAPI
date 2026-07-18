@@ -195,6 +195,43 @@ class BaselineTests(unittest.TestCase):
                 )
                 self.assertGreater(int(selected.sum()), 0)
 
+    def test_baseline_thresholds_ignore_test_period_score_mutation(self) -> None:
+        prices = make_ohlcv(100, seed=68)
+        index = pd.DatetimeIndex(prices["timestamp"])
+        fit_mask, test_mask = chronological_masks(index, 0.70)
+        signals = pd.DataFrame(
+            {
+                "mapi_score": [float(value) for value in range(100)],
+                "mapi_direction": 1.0,
+                "mapi_confidence": 1.0,
+                "signal": [SimpleNamespace(anomaly_components=[])] * 100,
+            },
+            index=index,
+        )
+        changed = signals.copy()
+        changed.loc[test_mask, "mapi_score"] = 0.0
+        kwargs = {
+            "horizon_bars": 2,
+            "reference_score_threshold": 50.0,
+            "fit_mask": fit_mask,
+            "test_mask": test_mask,
+            "transaction_cost_bps": 0.0,
+            "spread_bps": 0.0,
+            "slippage_bps": 0.0,
+            "bootstrap_samples": 20,
+        }
+        original = compare_baselines(prices, mapi_signals=signals, **kwargs)
+        mutated = compare_baselines(prices, mapi_signals=changed, **kwargs)
+        original_thresholds = original.loc[
+            original["analysis_type"] == "event_study",
+            ["name", "fitted_threshold"],
+        ].reset_index(drop=True)
+        mutated_thresholds = mutated.loc[
+            mutated["analysis_type"] == "event_study",
+            ["name", "fitted_threshold"],
+        ].reset_index(drop=True)
+        pd.testing.assert_frame_equal(original_thresholds, mutated_thresholds)
+
 
 if __name__ == "__main__":
     unittest.main()

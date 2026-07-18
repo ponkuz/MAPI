@@ -118,6 +118,27 @@ class CliEndToEndTests(unittest.TestCase):
                 backtest_payload["metrics"]["direction_column_used"],
                 "mapi_forecast_direction",
             )
+            event_rows = [
+                backtest_payload["metrics"],
+                *backtest_payload["score_buckets"],
+                *[
+                    row
+                    for row in backtest_payload["baseline_comparisons"]
+                    if row["analysis_type"] == "event_study"
+                ],
+                *backtest_payload["random_control_distribution"],
+                *backtest_payload["ablation"],
+            ]
+            for row in event_rows:
+                self.assertEqual(row["evaluation_count"], partition["test_count"])
+                self.assertEqual(row["evaluation_start"], partition["test_start"])
+                self.assertEqual(row["evaluation_end"], partition["test_end"])
+                self.assertTrue(
+                    all(
+                        partition["test_start"] <= timestamp <= partition["test_end"]
+                        for timestamp in row["selected_event_timestamps"]
+                    )
+                )
             self.assertTrue(
                 all(
                     row["reference_score_column"]

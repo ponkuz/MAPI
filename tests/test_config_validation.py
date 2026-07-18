@@ -116,6 +116,8 @@ class ConfigValidationTests(unittest.TestCase):
             ),
         )
         self.assertEqual(neutral.factors["regime"], 1.0)
+        self.assertEqual(neutral.factors["regime_confidence"], 0.0)
+        self.assertGreater(neutral.weight, 0.0)
         self.assertEqual(certain.factors["regime"], 1.25)
         self.assertGreater(certain.weight, neutral.weight)
 

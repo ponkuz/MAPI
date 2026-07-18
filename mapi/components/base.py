@@ -38,7 +38,8 @@ def empty_component_frame(index: pd.Index, reason: str = "") -> pd.DataFrame:
             "direction": 0.0,
             "forecast_direction": 0.0,
             "observed_pressure": 0.0,
-            "direction_semantics": "hypothesized_forward_direction",
+            "direction_semantics": "direction_neutral_unavailable",
+            "direction_contract_warning": None,
             "confidence": 0.0,
             "novelty": 0.0,
             "historical_extremeness": 0.0,
@@ -56,10 +57,13 @@ def finalize_component_frame(
     default_reason: str,
 ) -> pd.DataFrame:
     output = frame.reindex(index)
+    fallback_fields: list[str] = []
     if "forecast_direction" not in output:
         output["forecast_direction"] = output.get("direction", 0.0)
+        fallback_fields.append("forecast_direction")
     if "observed_pressure" not in output:
         output["observed_pressure"] = output.get("direction", 0.0)
+        fallback_fields.append("observed_pressure")
     output["direction"] = output["forecast_direction"]
     for column, default in {
         "anomaly_strength": 0.0,
@@ -81,10 +85,19 @@ def finalize_component_frame(
         )
         output[column] = output[column].fillna(0.0)
     if "direction_semantics" not in output:
-        output["direction_semantics"] = "hypothesized_forward_direction"
+        output["direction_semantics"] = "deprecated_implicit_direction_fallback"
+        fallback_fields.append("direction_semantics")
     output["direction_semantics"] = output["direction_semantics"].fillna(
-        "hypothesized_forward_direction"
+        "deprecated_implicit_direction_fallback"
     ).astype(str)
+    if "direction_contract_warning" not in output:
+        warning = (
+            "Legacy component direction fallback populated: "
+            + ", ".join(fallback_fields)
+            if fallback_fields
+            else None
+        )
+        output["direction_contract_warning"] = warning
     if "reason" not in output:
         output["reason"] = default_reason
     output["reason"] = output["reason"].fillna(default_reason).astype(str)

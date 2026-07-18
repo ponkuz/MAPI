@@ -55,7 +55,14 @@ class MarketRegimeDivergence:
             [(spread_z.abs() / 3.0).clip(0.0, 1.0), opposite_direction * regime_force],
             axis=1,
         ).max(axis=1)
-        direction = signed_unit_from_z(spread_z, scale=2.0)
+        observed_pressure = signed_unit_from_z(spread_z, scale=2.0)
+        directional_evidence = spread_z.abs() > 1.2
+        forecast_direction = observed_pressure.where(directional_evidence, 0.0)
+        direction_semantics = np.where(
+            directional_evidence,
+            "continuation_hypothesis_broad_market_relative_strength",
+            "direction_neutral_broad_market_divergence",
+        )
         confidence = (
             alignment.valid.rolling(horizon.rolling_window, min_periods=1).mean()
             * alignment.valid.astype(float)
@@ -107,7 +114,11 @@ class MarketRegimeDivergence:
         frame = pd.DataFrame(
             {
                 "anomaly_strength": strength,
-                "direction": direction,
+                "direction": forecast_direction,
+                "forecast_direction": forecast_direction,
+                "observed_pressure": observed_pressure,
+                "direction_semantics": direction_semantics,
+                "direction_contract_warning": None,
                 "confidence": confidence,
                 "novelty": novelty["novelty"].fillna(0.0),
                 "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),

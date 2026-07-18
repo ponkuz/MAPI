@@ -12,7 +12,7 @@ from mapi.realization import directional_realization_score
 from mapi.regimes import detect_market_regime
 from mapi.scoring import calculate_mapi
 from mapi.research.backtest import run_event_study
-from tests.helpers import make_ohlcv
+from tests.helpers import make_ohlcv, small_config
 
 
 class RegimeFrequencyRealizationTests(unittest.TestCase):
@@ -31,6 +31,34 @@ class RegimeFrequencyRealizationTests(unittest.TestCase):
         regimes = detect_market_regime(prices, None, horizon, MapiConfig())
         self.assertEqual(regimes["regime_source"].iloc[-1], "stock_fallback")
         self.assertAlmostEqual(float(regimes["regime_confidence"].iloc[-1]), 0.6)
+
+    def test_stale_benchmark_neutralizes_regime_adjustment_only(self) -> None:
+        prices = make_ohlcv(120, seed=205)
+        sector = make_ohlcv(120, seed=206, start_price=80.0)
+        benchmark = make_ohlcv(120, seed=207, start_price=420.0).iloc[:-3]
+        frame = calculate_mapi(
+            "TEST", prices, sector, benchmark, small_config()
+        )["short_term"]
+        latest = frame.iloc[-1]
+        self.assertEqual(latest["regime_source"], "benchmark_stale")
+        self.assertEqual(float(latest["regime_confidence"]), 0.0)
+        components = {
+            component.name: component
+            for component in latest["signal"].anomaly_components
+        }
+        self.assertEqual(components["market_regime_divergence"].confidence, 0.0)
+        for name in (
+            "price_volume_divergence",
+            "momentum_disagreement",
+            "volatility_anomaly",
+        ):
+            with self.subTest(component=name):
+                self.assertGreater(components[name].confidence, 0.0)
+                self.assertGreater(components[name].weight, 0.0)
+                self.assertEqual(
+                    components[name].weight_factors["regime"], 1.0
+                )
+        self.assertGreater(float(latest["mapi_intensity_score"]), 0.0)
 
     def test_daily_and_intraday_horizon_mismatches_are_detected(self) -> None:
         daily = pd.date_range("2025-01-01", periods=20, freq="B", tz="UTC")

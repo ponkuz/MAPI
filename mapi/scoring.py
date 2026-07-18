@@ -19,7 +19,12 @@ from mapi.components.base import AnomalyComponent, ComponentContext, finalize_co
 from mapi.config import MapiConfig
 from mapi.data.frequency import FrequencyValidation, validate_horizon_frequency
 from mapi.data.validation import normalize_ohlcv, ohlcv_quality_score
-from mapi.explainability import build_summary, dominant_anomalies, machine_reasons
+from mapi.explainability import (
+    build_summary,
+    dominant_alert_anomalies,
+    dominant_intensity_anomalies,
+    machine_reasons,
+)
 from mapi.models import ComponentSignal, HorizonConfig, MapiSignal, clamp
 from mapi.normalization import prior_percentile_rank, rolling_percentile_rank
 from mapi.redundancy import compute_redundancy_penalties
@@ -235,6 +240,11 @@ def _score_horizon(
                 ),
                 recurrence_rate=clamp(float(row.get("recurrence_rate", 0.0)), 0.0, 1.0),
                 redundancy_penalty=penalty,
+                direction_contract_warning=(
+                    str(row["direction_contract_warning"])
+                    if pd.notna(row.get("direction_contract_warning"))
+                    else None
+                ),
                 reason=str(row["reason"]),
                 metrics=row["metrics"] if isinstance(row["metrics"], dict) else {},
                 weight_factors=weight_decision.factors,
@@ -369,14 +379,16 @@ def _score_horizon(
             else clamp(intensity_score, 0.0, 100.0)
         )
 
-        reasons = dominant_anomalies(component_signals)
+        intensity_reasons = dominant_intensity_anomalies(component_signals)
+        alert_reasons = dominant_alert_anomalies(component_signals)
         summary = build_summary(
             score=intensity_score,
             direction=forecast_direction,
             regime=current_regime,
             state=state,
             confirmation_count=confirmation_count,
-            reasons=reasons,
+            reasons=intensity_reasons,
+            alert_score=alert_score,
         )
         signal = MapiSignal(
             symbol=symbol,
@@ -397,7 +409,9 @@ def _score_horizon(
             regime_source=current_regime_source,
             regime_confidence=current_regime_confidence,
             anomaly_components=component_signals,
-            dominant_anomalies=reasons,
+            dominant_anomalies=intensity_reasons,
+            dominant_intensity_anomalies=intensity_reasons,
+            dominant_alert_anomalies=alert_reasons,
             data_quality_score=data_quality,
             ohlcv_quality_score=current_ohlcv_quality,
             evidence_coverage_score=evidence_coverage,
@@ -440,7 +454,9 @@ def _score_horizon(
                 "mapi_regime": current_regime,
                 "regime_source": current_regime_source,
                 "regime_confidence": current_regime_confidence,
-                "dominant_anomalies": reasons,
+                "dominant_anomalies": intensity_reasons,
+                "dominant_intensity_anomalies": intensity_reasons,
+                "dominant_alert_anomalies": alert_reasons,
                 "data_quality_score": data_quality,
                 "ohlcv_quality_score": current_ohlcv_quality,
                 "evidence_coverage_score": evidence_coverage,

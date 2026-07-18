@@ -4,10 +4,12 @@ import unittest
 
 import pandas as pd
 
-from mapi.components.base import ComponentContext
+from mapi.components.base import ComponentContext, finalize_component_frame
+from mapi.components.market_regime import MarketRegimeDivergence
 from mapi.components.momentum_disagreement import MomentumDisagreement
 from mapi.components.price_volume import PriceVolumeDivergence
 from mapi.components.stock_sector import StockSectorDivergence
+from mapi.components.volatility import VolatilityAnomaly
 from mapi.data.validation import normalize_ohlcv
 from tests.helpers import make_ohlcv, small_config
 
@@ -103,6 +105,80 @@ class ComponentTests(unittest.TestCase):
         self.assertGreater(metrics["volume_z"], 0.0)
         self.assertLess(metrics["directional_flow_z"], 0.0)
         self.assertEqual(metrics["directional_flow_mismatch"], 0.0)
+
+    def test_enabled_components_define_explicit_direction_contracts(self) -> None:
+        context = ComponentContext(
+            symbol="TEST",
+            sector_frame=self.prices,
+            benchmark_frame=self.prices,
+        )
+        components = (
+            PriceVolumeDivergence(),
+            StockSectorDivergence(),
+            MomentumDisagreement(),
+            VolatilityAnomaly(),
+            MarketRegimeDivergence(),
+        )
+        semantics: set[str] = set()
+        for component in components:
+            with self.subTest(component=component.name):
+                result = component.calculate(
+                    self.prices, context, self.horizon, self.config
+                )
+                for column in (
+                    "forecast_direction",
+                    "observed_pressure",
+                    "direction_semantics",
+                    "direction_contract_warning",
+                ):
+                    self.assertIn(column, result)
+                self.assertTrue(result["direction_contract_warning"].isna().all())
+                self.assertFalse(
+                    result["direction_semantics"].str.contains(
+                        "deprecated_implicit", regex=False
+                    ).any()
+                )
+                semantics.update(result["direction_semantics"].unique())
+        self.assertGreaterEqual(len(semantics), len(components))
+
+    def test_volatility_is_direction_neutral_despite_observed_pressure(self) -> None:
+        result = VolatilityAnomaly().calculate(
+            self.prices,
+            ComponentContext(symbol="TEST"),
+            self.horizon,
+            self.config,
+        )
+        self.assertTrue((result["forecast_direction"] == 0.0).all())
+        self.assertTrue((result["observed_pressure"].abs() > 0.0).any())
+        self.assertTrue(
+            result["direction_semantics"].str.startswith("direction_neutral_").all()
+        )
+
+    def test_legacy_direction_fallback_emits_deterministic_diagnostic(self) -> None:
+        legacy = pd.DataFrame(
+            {
+                "anomaly_strength": 0.5,
+                "direction": 1.0,
+                "confidence": 1.0,
+                "novelty": 1.0,
+            },
+            index=self.prices.index,
+        )
+        result = finalize_component_frame(
+            legacy, self.prices.index, "legacy component"
+        )
+        self.assertTrue(
+            (
+                result["direction_semantics"]
+                == "deprecated_implicit_direction_fallback"
+            ).all()
+        )
+        self.assertTrue(
+            result["direction_contract_warning"].str.contains(
+                "forecast_direction, observed_pressure, direction_semantics",
+                regex=False,
+            ).all()
+        )
 
 
 if __name__ == "__main__":

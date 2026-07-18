@@ -1,4 +1,4 @@
-# MAPI v0.2 to v0.3 targeted source audit
+# MAPI v0.2 to v0.3.1 targeted source audit
 
 This source audit does not establish profitability. No parameter was tuned against the final test set. Each item below records the confirmed finding, changed files, regression coverage, behavioral change, compatibility effect, and remaining methodological uncertainty.
 
@@ -151,7 +151,7 @@ This source audit does not establish profitability. No parameter was tuned again
 - **Confirmed:** materially changed formulas were still labeled package and signal v0.2, and old YAML could relabel current calculations as v0.1.
 - **Files/lines:** `mapi/version.py:1-5`; `pyproject.toml:3`; `mapi/__init__.py:9-12`; `mapi/config.py:57-64,99-104`; `mapi/models.py:132-136`; `mapi/scoring.py:399-403`; `configs/mapi_v0_3.yaml:1-7`; `tests/test_scoring.py:17-35,66-79`.
 - **Regression:** serialized output asserts algorithm revision and data-contract version, a 64-character config fingerprint, and unchanged algorithm identity when legacy public-score selection is requested.
-- **Before/after:** output now exposes implementation `0.3.0`, algorithm `mapi_v0.3_source_audit_r2`, data contract `mapi_signal_v0.3`, and a canonical SHA-256 config fingerprint.
+- **Before/after:** output now exposes implementation `0.3.1`, algorithm `mapi_v0.3_source_audit_r3`, data contract `mapi_signal_v0.3.1`, and a canonical SHA-256 config fingerprint.
 - **Compatibility:** package version and default config path changed to v0.3. Old YAML files still load as behavior selectors, but `signal_version` is now a compatibility alias for the actual algorithm revision.
 - **Uncertainty:** a config fingerprint identifies settings, not input data, provider revision, or execution environment.
 
@@ -195,10 +195,64 @@ This source audit does not establish profitability. No parameter was tuned again
 
 - **Confirmed:** weekly/monthly bars were labeled daily, regime multipliers ignored regime confidence, zero-reliability components inflated evidence, and selected-event correlation was called a generic information coefficient.
 - **Files/lines:** `mapi/data/frequency.py:27-35`; `mapi/weights.py:51-55`; `mapi/scoring.py:176-181,276-303`; `mapi/models.py:245,296-322`; `.github/workflows/ci.yml:16,31-40`; `tests/test_regime_frequency_realization.py:72-84`; `tests/test_confidence.py:173-196`; `tests/test_config_validation.py:93-120`.
-- **Regression:** interval-range classification distinguishes four frequencies; zero regime confidence produces a neutral multiplier; zero reliability adds no coverage or confirmation; output contains canonical `active_event_ic`.
+- **Regression:** interval-range classification distinguishes four frequencies; zero regime confidence produces a neutral regime multiplier without zeroing component weight; zero reliability adds no coverage or confirmation; output contains canonical `active_event_ic`.
 - **Before/after:** regime effects interpolate toward neutral by confidence, reliable component weight defines coverage capacity, and the selected-event correlation name states its evaluation universe.
 - **Compatibility:** `information_coefficient` remains a warning-labeled alias. Weekly/monthly inputs can now fail daily expectations. Implementation commit `8e5cf4398e3e8d6341071a8eed71ae8032c647e8` is cross-version verified by the completed green Python 3.12/3.13 CI matrix.
 - **Uncertainty:** interval buckets remain calendar-agnostic, regime confidence is heuristic, and selected-event IC remains selection-conditioned.
+
+## 23. Regime-confidence multiplication
+
+- **Confirmed:** v0.3 placed diagnostic `regime_confidence` inside the dictionary whose every value was multiplied into final weight, so confidence zero disabled all components despite a neutral regime factor.
+- **Files/lines:** `mapi/weights.py:51-70`; `tests/test_config_validation.py:93-122`; `tests/test_regime_frequency_realization.py:35-66`.
+- **Regression tests:** `test_regime_multiplier_scales_with_regime_confidence`; `test_stale_benchmark_neutralizes_regime_adjustment_only`.
+- **Before/after:** confidence zero previously multiplied final weight by zero. It now only interpolates the regime adjustment to 1.0; the value remains diagnostic, benchmark-dependent market-regime confidence becomes zero through data alignment, and price-volume, momentum, and volatility remain positively weighted.
+- **Compatibility:** stale or unknown regime bars can now retain non-benchmark anomaly intensity instead of collapsing the aggregate to zero. No configured multiplier or threshold changed.
+- **Uncertainty:** regime confidence remains heuristic, and neutral weighting does not establish that regime-independent components are predictive during stale benchmark periods.
+
+## 24. Explicit enabled-component direction contracts
+
+- **Confirmed:** stock-sector, volatility, and market-regime components relied on a fallback that silently relabeled contemporaneous direction as a forecast.
+- **Files/lines:** `mapi/components/base.py:55-101`; `mapi/components/stock_sector.py:62-86,143-151`; `mapi/components/volatility.py:65-80,116-123`; `mapi/components/market_regime.py:58-66,114-122`; `tests/test_components.py:109-180`; `tests/test_stock_sector_correlation.py:72-79`; `tests/test_backtest.py:259-281`.
+- **Regression tests:** `test_enabled_components_define_explicit_direction_contracts`; `test_volatility_is_direction_neutral_despite_observed_pressure`; `test_legacy_direction_fallback_emits_deterministic_diagnostic`; `test_decline_from_high_historical_correlation_is_a_breakdown`; `test_event_study_uses_explicit_forecast_direction_only`.
+- **Before/after:** volatility anomalies are direction-neutral; correlation breakdown alone is neutral; beta-adjusted stock-sector residual and broad-market relative strength use explicitly labeled continuation hypotheses only above directional evidence thresholds. The fallback remains but emits `deprecated_implicit_direction_fallback` and a deterministic warning.
+- **Compatibility:** aggregate forecast direction and long/short event identity can change. Consumers needing contemporaneous measurements must use `observed_pressure`; legacy component plugins receive a warning rather than a silent forecast label.
+- **Uncertainty:** continuation mappings are hypotheses, direction thresholds are heuristic, and direction-neutral anomalies may still matter for volatility or sizing in a future portfolio model.
+
+## 25. Intensity and alert explanations
+
+- **Confirmed:** `dominant_anomalies` ranked novelty-adjusted alert contributions while summary and state described intensity, leaving persistent confirmed anomalies unexplained when novelty reached zero.
+- **Files/lines:** `mapi/explainability.py:26-58,89-119`; `mapi/models.py:129-133,192-196`; `mapi/scoring.py:382-414,457-459`; `tests/test_scoring.py:81-134`.
+- **Regression test:** `test_recurrence_does_not_invalidate_persistent_intensity`.
+- **Before/after:** output now separates `dominant_intensity_anomalies` and `dominant_alert_anomalies`; summary uses intensity reasons and explicitly notes recurrence suppression when intensity remains strong but alert is near zero.
+- **Compatibility:** `dominant_anomalies` now explicitly aliases intensity reasons in v0.3.1. Two serialized explanation fields and component contribution diagnostics were added, requiring data-contract `mapi_signal_v0.3.1`.
+- **Uncertainty:** reason ranking remains contribution-based and does not provide causal attribution or calibrated explanatory importance.
+
+## 26. Shared-partition evidence
+
+- **Confirmed:** v0.3 shared one CLI partition but tests only compared main and full-ablation sample counts; they did not expose event timestamps or prove fit-only threshold invariance.
+- **Files/lines:** `mapi/models.py:263-271`; `mapi/research/backtest.py:55-57,153-159,255-261`; `tests/test_cli.py:121-142`; `tests/test_matching.py:79-112`; `tests/test_baselines.py:198-239`; `tests/test_ablation.py:63-111`.
+- **Regression tests:** `test_cli_tools_write_finite_reproducible_json`; `test_fitted_threshold_uses_fit_partition_only`; `test_baseline_thresholds_ignore_test_period_score_mutation`; `test_ablation_thresholds_ignore_test_period_score_mutation`.
+- **Before/after:** every event-study row now records evaluation count/bounds and selected timestamps. CLI tests cover main, buckets, event baselines, random controls, full MAPI, and component ablations; test-score mutation cannot change fitted thresholds, while fit-score mutation can.
+- **Compatibility:** event-study JSON gains evaluation metadata and selected timestamp lists. This increases report size but does not alter event selection.
+- **Uncertainty:** timestamp evidence proves partition discipline for the tested orchestration, not the statistical adequacy of a single holdout period.
+
+## 27. Direct API evidence policy
+
+- **Confirmed:** direct `run_event_study` defaults remained intentionally permissive, but the difference from CLI evidence gates was not prominent and no protected programmatic helper existed.
+- **Files/lines:** `mapi/research/backtest.py:315-350`; `mapi/research/__init__.py:1-22`; `README.md:58-62`; `docs/execution_semantics.md:26-32`; `tests/test_backtest.py:283-315`.
+- **Regression test:** `test_configured_event_study_applies_cli_evidence_policy`.
+- **Before/after:** direct calls retain compatibility defaults; `run_configured_event_study` applies configured horizon, score, forecast direction, costs, bootstrap, confidence, data quality, and frequency policy.
+- **Compatibility:** existing callers are unchanged. Programmatic callers seeking CLI-equivalent protections must migrate explicitly to the new helper or pass all gates themselves.
+- **Uncertainty:** the helper enforces configuration consistency but cannot determine whether configured quality thresholds are empirically appropriate.
+
+## 28. v0.3.1 identity
+
+- **Confirmed:** regime weighting, forecast mappings, explanation fields, and event metadata materially changed behavior and serialization after r2.
+- **Files/lines:** `mapi/version.py:3-5`; `pyproject.toml:3`; `configs/mapi_v0_3.yaml:1`; `mapi/models.py:129-133,263-271`; `tests/test_edge_cases.py:58-91`; `tests/test_scoring.py:17-35`.
+- **Regression tests:** `test_json_output_contains_v031_schema`; `test_scores_are_bounded_and_serializable`; `test_legacy_public_score_selector_does_not_relabel_algorithm`.
+- **Before/after:** package implementation is `0.3.1`, algorithm revision is `mapi_v0.3_source_audit_r3`, and data contract is `mapi_signal_v0.3.1`; config fingerprint remains distinct.
+- **Compatibility:** consumers validating exact versions or schemas must accept the new identifiers and fields. Legacy YAML `signal_version` input still cannot relabel actual output.
+- **Uncertainty:** r3 has local Python 3.13 verification at this point; cross-version status must not be claimed until this revision's GitHub Actions 3.12/3.13 matrix completes.
 
 ## Remaining system-level limits
 

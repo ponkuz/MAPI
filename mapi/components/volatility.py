@@ -62,7 +62,21 @@ class VolatilityAnomaly:
         strength = pd.concat(
             [compression_with_volume, expansion_without_trend, abnormal_gap], axis=1
         ).max(axis=1)
-        direction = signed_unit_from_z(return_z, scale=2.5) * (1.0 - expansion_without_trend * 0.5)
+        observed_pressure = signed_unit_from_z(return_z, scale=2.5)
+        forecast_direction = pd.Series(0.0, index=price_frame.index)
+        direction_semantics = np.select(
+            [
+                compression_with_volume > 0.35,
+                expansion_without_trend > 0.35,
+                abnormal_gap > 0.35,
+            ],
+            [
+                "direction_neutral_volatility_compression",
+                "direction_neutral_volatility_expansion_without_trend",
+                "direction_neutral_abnormal_gap",
+            ],
+            default="direction_neutral_volatility_baseline",
+        )
         confidence = (
             price_frame[["open", "high", "low", "close"]]
             .notna()
@@ -101,7 +115,11 @@ class VolatilityAnomaly:
         frame = pd.DataFrame(
             {
                 "anomaly_strength": strength,
-                "direction": direction.clip(-1.0, 1.0),
+                "direction": forecast_direction,
+                "forecast_direction": forecast_direction,
+                "observed_pressure": observed_pressure,
+                "direction_semantics": direction_semantics,
+                "direction_contract_warning": None,
                 "confidence": confidence,
                 "novelty": novelty["novelty"].fillna(0.0),
                 "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),

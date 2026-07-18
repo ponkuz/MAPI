@@ -69,6 +69,14 @@ class StockSectorCorrelationTests(unittest.TestCase):
             dtype=float,
         ).dropna()
         self.assertGreater(float(declines.iloc[-60:].max()), 0.40)
+        neutral_breakdown = (
+            result["direction_semantics"]
+            == "direction_neutral_correlation_breakdown"
+        )
+        self.assertTrue(bool(neutral_breakdown.any()))
+        self.assertTrue(
+            (result.loc[neutral_breakdown, "forecast_direction"] == 0.0).all()
+        )
 
 
 if __name__ == "__main__":

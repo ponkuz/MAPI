@@ -1,6 +1,6 @@
 # Stock AI Scout: Market Anomaly Pressure Index
 
-MAPI is an experimental, modular stock-market anomaly signal. Version 0.3 separates pure anomaly intensity (`mapi_intensity_score`, 0-100), recurrence retention (`mapi_novelty_score`, 0-100), recurrence-adjusted alerting (`mapi_alert_score`, 0-100), realization-adjusted opportunity (`mapi_actionability_score`, 0-100), forecast direction (`mapi_forecast_direction`, -1 to 1), observed pressure, and evidence quality. It is a research instrument, not a profitability claim or trading recommendation.
+MAPI is an experimental, modular stock-market anomaly signal. Version 0.3.1 separates pure anomaly intensity (`mapi_intensity_score`, 0-100), recurrence retention (`mapi_novelty_score`, 0-100), recurrence-adjusted alerting (`mapi_alert_score`, 0-100), realization-adjusted opportunity (`mapi_actionability_score`, 0-100), forecast direction (`mapi_forecast_direction`, -1 to 1), observed pressure, and evidence quality. It is a research instrument, not a profitability claim or trading recommendation.
 
 This workspace did not contain an existing Stock AI Scout codebase or git history, so the implementation is a standalone Python package with explicit provider interfaces. It can be integrated behind the project's eventual data and signal APIs without coupling the indicator to a vendor.
 
@@ -29,7 +29,7 @@ alert_score     = 100 * sum(alert_i) / sum(capacity_i)
 actionability_score = alert_score * (1 - directional_realization_penalty * directional_realization_score)
 ```
 
-`mapi_raw_score` is a compatibility alias for intensity. `mapi_score` is selected by `score_semantics`; the v0.3 default is intensity. Anomaly state, age, trend, persistence, and confirmation use intensity and therefore are not invalidated solely by recurrence. `mapi_direction` aliases the explicit forecast-direction aggregate; `mapi_observed_pressure` remains separate. `recent_move_extremeness` is descriptive only. `directional_realization_score` is positive only when movement since `anomaly_first_detected_at` aligns with forecast direction. Old YAML files may select legacy public-score behavior, but they cannot relabel the implementation as an older algorithm revision. Output includes implementation, algorithm, data-contract, and config-fingerprint identifiers.
+`mapi_raw_score` is a compatibility alias for intensity. `mapi_score` is selected by `score_semantics`; the v0.3.1 default is intensity. Anomaly state, age, trend, persistence, and confirmation use intensity and therefore are not invalidated solely by recurrence. `dominant_intensity_anomalies` explains that state, while `dominant_alert_anomalies` contains only novelty-retaining contributors; legacy `dominant_anomalies` aliases intensity reasons. `mapi_direction` aliases the explicit forecast-direction aggregate; `mapi_observed_pressure` remains separate. Each enabled component declares whether its forecast is continuation, reversal, conditional, or direction-neutral. `recent_move_extremeness` is descriptive only. `directional_realization_score` is positive only when movement since `anomaly_first_detected_at` aligns with forecast direction. Old YAML files may select legacy public-score behavior, but they cannot relabel the implementation as an older algorithm revision. Output includes implementation, algorithm, data-contract, and config-fingerprint identifiers.
 
 ## Data flow
 
@@ -58,6 +58,8 @@ python examples\run_backtest.py --symbol AAPL --prices data\AAPL.csv --sector da
 ```
 
 The event-study CLI uses `research_score_column` from configuration (`mapi_actionability_score` by default). Override it with `--score-column`; JSON records the score and direction columns. One chronological split is created for the entire report. All metrics use the test mask, while baseline and ablation thresholds are fitted only on the fit mask. Configured confidence, data-quality, and frequency-compatibility gates apply to both matching and event selection.
+
+For backward compatibility, direct `run_event_study()` calls remain permissive unless evidence gates are passed explicitly. Programmatic users who want the CLI policy should call `run_configured_event_study(signals, prices, config, horizon_name, ...)`; it applies the configured score column, horizon, costs, confidence, quality, frequency, bootstrap, and forecast-direction settings.
 
 Programmatic use:
 

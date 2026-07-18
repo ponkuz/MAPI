@@ -50,18 +50,21 @@ def calculate_dynamic_weight(
 
     regime_confidence = clamp(inputs.regime_confidence, 0.0, 1.0)
     confidence_scaled_regime = 1.0 + (regime_multiplier - 1.0) * regime_confidence
-    factors = {
+    multiplicative_factors = {
         "regime": confidence_scaled_regime,
-        "regime_confidence": regime_confidence,
         "freshness": 0.75 + 0.25 * clamp(inputs.freshness, 0.0, 1.0),
         "reliability": clamp(inputs.reliability, 0.0, 1.0),
         "liquidity": 0.80 + 0.20 * clamp(inputs.liquidity, 0.0, 1.0),
         "persistence": 0.85 + 0.30 * clamp(inputs.persistence, 0.0, 1.0),
     }
     weight = base_weight
-    for factor in factors.values():
+    for factor in multiplicative_factors.values():
         weight *= factor
+    diagnostics = {
+        **multiplicative_factors,
+        "regime_confidence": regime_confidence,
+    }
     return WeightDecision(
         weight=clamp(weight, 0.0, 1.0),
-        factors={name: round(value, 6) for name, value in factors.items()},
+        factors={name: round(value, 6) for name, value in diagnostics.items()},
     )
