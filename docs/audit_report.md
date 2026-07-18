@@ -117,7 +117,7 @@ This source audit does not establish profitability. No parameter was tuned again
 - **Regression:** CI matrix declares Python 3.12 and 3.13 and runs full `unittest`, full `pytest`, both CLI paths, and configuration validation.
 - **Before/after:** cross-version verification is automated on push and pull request instead of inferred from one local runtime.
 - **Compatibility:** CI installs the existing `.[dev]` extra; package runtime requirements are unchanged.
-- **Uncertainty:** implementation commit `8e5cf4398e3e8d6341071a8eed71ae8032c647e8` completed the full Python 3.12/3.13 matrix in GitHub Actions run `29637248281`; this does not cover future environment or dependency changes.
+- **Uncertainty:** implementation commit `1433fe1d7c811a0cf6e0be8a22a6e7395e2626e5` completed the full Python 3.12/3.13 matrix in GitHub Actions run `29638531915`; this does not cover future environment or dependency changes.
 
 ## 14. One chronological CLI partition
 
@@ -252,7 +252,7 @@ This source audit does not establish profitability. No parameter was tuned again
 - **Regression tests:** `test_json_output_contains_v031_schema`; `test_scores_are_bounded_and_serializable`; `test_legacy_public_score_selector_does_not_relabel_algorithm`.
 - **Before/after:** package implementation is `0.3.1`, algorithm revision is `mapi_v0.3_source_audit_r3`, and data contract is `mapi_signal_v0.3.1`; config fingerprint remains distinct.
 - **Compatibility:** consumers validating exact versions or schemas must accept the new identifiers and fields. Legacy YAML `signal_version` input still cannot relabel actual output.
-- **Uncertainty:** r3 has local Python 3.13 verification at this point; cross-version status must not be claimed until this revision's GitHub Actions 3.12/3.13 matrix completes.
+- **Uncertainty:** r3 implementation commit `1433fe1d7c811a0cf6e0be8a22a6e7395e2626e5` completed the green Python 3.12/3.13 matrix in GitHub Actions run `29638531915`; future dependency and platform changes remain outside that evidence.
 
 ## Remaining system-level limits
 
