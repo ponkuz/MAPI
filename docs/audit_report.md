@@ -1,78 +1,127 @@
-# Targeted pre-Phase-2 audit
+# MAPI v0.2 targeted source audit
 
-This audit does not establish profitability. The pre-audit suite had 13 passing tests; the post-audit suite has 44 passing tests on Python 3.13.1.
+This source audit does not establish profitability. No parameter was tuned against the final test set. Each item below records the confirmed finding, changed files, regression coverage, behavioral change, compatibility effect, and remaining methodological uncertainty.
 
-## Confirmed findings and fixes
+## 1. Novelty and recurrence
 
-1. **Anomaly intensity and actionability were conflated.** The v0.1 scorer multiplied the normalized anomaly score by `1 - penalty * already_realized_score` before publishing `mapi_score`. Version 0.2 publishes pure intensity as both `mapi_score` and `mapi_raw_score`, and publishes the adjusted value as `mapi_actionability_score`. The v0.1 YAML config retains legacy semantics.
-2. **Novelty was double-counted.** It was both the explicit `novelty` multiplier and the dynamic-weight `rarity` factor. The rarity factor was removed; novelty now appears only in the explicit score formula.
-3. **Availability was over-counted.** Component confidence also modified dynamic weight. Availability was removed from dynamic weighting; it now affects the explicit confidence multiplier, independent evidence coverage, aggregate confidence, and composite data quality for distinct documented purposes.
-4. **Cross-asset observations were forward-filled indefinitely.** Sector, benchmark, and regime code now use backward-only as-of alignment, same-UTC-date session protection, maximum staleness, frequency compatibility, and zero component confidence for invalid matches.
-5. **Redundancy correlation included the current event.** Rolling correlation is now shifted by one bar, configurable minimum observations are enforced, and tests cover symmetry, order invariance, negative correlation, zero variance, and unavailable components.
-6. **Backtest terminology implied a portfolio simulation.** The engine is now explicitly `run_event_study`, non-overlapping by default, and returns warnings and event-metric aliases. `run_backtest` remains a compatibility wrapper. Portfolio metrics have a separate reserved namespace.
-7. **Evidence coverage was not independently visible.** Outputs now separate `ohlcv_quality_score`, `evidence_coverage_score`, composite `data_quality_score`, and aggregate `mapi_confidence`.
-8. **Corporate-action assumptions were implicit.** Adjusted-price requirements and split-like discontinuity warnings were added.
-9. **Negative controls were incomplete.** Sector-relative strength, equal-weight components, shuffled MAPI, isolated stock-sector residual, isolated volatility anomaly, and ten-seed random distributions were added.
-10. **Calibration fitting discipline was unenforced.** The calibrator records its fit period and refuses `dataset_role="test"`.
+- **Confirmed:** `rolling_percentile_rank` included the current value and assigned a constant series rank 1.0. It did not model recurrence.
+- **Files:** `mapi/normalization.py`, all five enabled component modules, `mapi/models.py`, `mapi/scoring.py`, `mapi/explainability.py`, `tests/test_novelty.py`.
+- **Regression:** constant, repeated near-identical, gradually increasing, and one-off anomaly sequences.
+- **Before/after:** novelty was current-inclusive extremeness; it is now prior-only mid-rank extremeness multiplied by one minus near-identical recurrence. Constant events converge to novelty 0.
+- **Compatibility:** `rolling_percentile_rank` remains for descriptive current-inclusive ranks. Component JSON adds `historical_extremeness` and `recurrence_rate`; `novelty` semantics changed.
+- **Uncertainty:** the absolute recurrence tolerance is heuristic and may need scale-aware calibration using training data only.
 
-## Scoring concept audit after fixes
+## 2. Explicit research score
 
-| Concept | Component confidence | Dynamic weight | Explicit score multiplier | Aggregate confidence / quality |
-| --- | --- | --- | --- | --- |
-| Data availability | Yes | No | Through confidence | Evidence coverage and confidence |
-| Data freshness | Cross-asset validity | Yes for stock bar spacing | No | Through invalid-source confidence |
-| Reliability | No | Yes, static configured prior | No | No |
-| Liquidity | No | Yes, trailing relative proxy | No | No |
-| Persistence | No | Yes | No | State/age metadata only |
-| Novelty | No | No | Yes | No |
-| Cross-sectional rarity | Not available in Phase 1 | No | No | No |
-| Redundancy | No | No | Yes, lagged penalty | Independent evidence coverage |
+- **Confirmed:** the event study dynamically preferred actionability while score buckets defaulted to `mapi_score`.
+- **Files:** `mapi/config.py`, `configs/mapi_v0_2.yaml`, `examples/run_backtest.py`, `mapi/research/backtest.py`, `mapi/research/baselines.py`, `mapi/research/ablation.py`, `tests/test_cli.py`.
+- **Regression:** CLI output asserts one `score_column_used`; the value is passed to event study, buckets, frequency matching, controls, and ablation.
+- **Before/after:** report sections could evaluate different scores; one configured or CLI-selected column now governs the report and is serialized in JSON.
+- **Compatibility:** `run_event_study` now has a stable `mapi_score` default instead of dynamic column selection. The CLI default is explicitly `mapi_actionability_score` through configuration.
+- **Uncertainty:** choosing raw anomaly versus actionability is a research-design decision, not evidence that either has predictive value.
 
-Redundancy appears in both effective score and capacity so it changes relative component contribution rather than mechanically shrinking every normalized score. It also lowers evidence coverage because correlated evidence is less independent. Family-level caps were considered but not added: Phase 1 currently has one enabled detector per information family. Caps should be added before multiple detectors from one family are enabled.
+## 3. Stock-sector correlation breakdown
 
-## Checked non-issues
+- **Confirmed:** `1 - abs(current correlation)` measured low correlation, not decline from prior correlation; covariance and variance used inconsistent ddof values.
+- **Files:** `mapi/components/stock_sector.py`, `tests/test_stock_sector_correlation.py`.
+- **Regression:** persistently low correlation produces no sustained breakdown; a transition from high to low correlation does. Covariance and variance both use `ddof=0`.
+- **Before/after:** low correlation was always anomalous; only a positive decline from a lagged rolling median absolute-correlation baseline contributes now.
+- **Compatibility:** component strength and reason composition can change materially; metrics add baseline and decline values.
+- **Uncertainty:** rolling median baseline/window selection is robust but heuristic and can react slowly to genuine structural changes.
 
-- Historical z-score means and standard deviations are shifted by one bar.
-- Rolling beta, stock mean, and sector mean are shifted before residual calculation.
-- Prior highs/lows and prior momentum extrema exclude the current bar.
-- Novelty percentiles include only the current and earlier observations; they do not use future rows.
-- Liquidity and regime features are point-in-time rolling features.
-- `already_realized_score` is the rolling percentile rank of the absolute trailing return ending at the signal bar. It contains no forward return.
-- Missing components have zero confidence and contribute no scoring capacity; zero denominator returns zero score and confidence.
-- Direction can cancel to neutral while anomaly intensity remains high.
-- Score and confidence ranges remain finite under constant prices, zero volume, short history, NaN, and infinity inputs.
-- Fixed score and calibration buckets are not estimated from test outcomes. Fitted calibration explicitly rejects a test role.
+## 4. Frequency-matched negative controls
 
-Exact realization formula for horizon return window `h` and rolling window `w`:
+- **Confirmed:** unrelated baseline score scales used the same numeric threshold.
+- **Files:** `mapi/research/matching.py`, `mapi/research/baselines.py`, `examples/run_backtest.py`, `tests/test_baselines.py`.
+- **Regression:** every event baseline reports fitted threshold, target/fitted/test frequency, selected count, and excluded overlaps; names verify both buy-and-hold concepts.
+- **Before/after:** each control fits a threshold on the chronological fit partition to match MAPI frequency and freezes it for test. `buy_and_hold` became `always_long_fixed_horizon`; `full_period_buy_and_hold` is separate.
+- **Compatibility:** baseline names and score column (`baseline_score`) changed; result rows gained fit metadata.
+- **Uncertainty:** discrete/tied scores may only approximately match frequency, and frequency matching does not equalize turnover, exposure, or information content.
 
-```text
-trailing_abs_return[t] = abs(close[t] / close[t-h] - 1)
-already_realized_score[t] = percentile_rank(
-    trailing_abs_return[t],
-    trailing_abs_return[t-w+1 : t+1]
-)
-actionability[t] = raw_anomaly[t] * (1 - penalty * already_realized_score[t])
-```
+## 5. OHLC path labels
 
-Every term ends at `t`; forward labels are stored only in the research namespace.
+- **Confirmed:** MFE, MAE, and breakout used close only despite path terminology.
+- **Files:** `mapi/research/labels.py`, `mapi/research/backtest.py`, `mapi/models.py`, `tests/test_backtest.py`.
+- **Regression:** hand-calculated long and short OHLC paths verify intrabar MFE/MAE while realized return remains close-to-close.
+- **Before/after:** canonical fields are `intrabar_mfe`, `intrabar_mae`, and `intrabar_breakout`; future high/low after entry drive them.
+- **Compatibility:** legacy `mfe`, `mae`, and `breakout` aliases remain but now carry intrabar semantics and emit compatibility warnings in metrics output.
+- **Uncertainty:** OHLC bars do not reveal intrabar ordering, fillability, gaps, or whether both favorable and adverse extremes occurred before exit.
 
-## Compatibility changes
+## 6. Event-return statistics
 
-- Default code and CLI configuration moved to `mapi_v0.2`.
-- v0.2 changes `mapi_score` semantics from realization-adjusted opportunity to pure anomaly intensity.
-- Additive fields: `mapi_raw_score`, `mapi_actionability_score`, `ohlcv_quality_score`, and `evidence_coverage_score`.
-- `configs/mapi_v0_1.yaml` preserves the old `mapi_score` semantics while still exposing the additive fields.
-- Legacy event metric names remain, but warnings and explicit event aliases are now returned.
-- `market_breadth.py` is a compatibility import; the implementation lives in `market_regime.py` because Phase 1 uses a broad index, not true breadth data.
+- **Confirmed:** `sqrt(252 / horizon_bars)` annualization ignored event frequency and timestamp spacing.
+- **Files:** `mapi/research/backtest.py`, `mapi/models.py`, `mapi/config.py`, `configs/mapi_v0_2.yaml`, `tests/test_backtest.py`.
+- **Regression:** event ratios equal unannualized mean/std values and deterministic bootstrap intervals contain the sample mean.
+- **Before/after:** reports use unannualized `event_return_mean_to_std`, downside equivalent, and a 95% bootstrap mean-return interval.
+- **Compatibility:** legacy Sharpe/Sortino fields alias unannualized event ratios and carry an explicit warning; they are no longer annualized.
+- **Uncertainty:** iid bootstrap resampling does not model clustered regimes or serial dependence; a portfolio simulator is required for annualized risk metrics.
 
-## Remaining unproven assumptions
+## 7. Descriptive classification names
 
-- No Python 3.12 runtime is installed in the current environment; verification was completed on Python 3.13.1 only.
-- UTC dates are an approximation for trading sessions, not an exchange calendar.
-- Relative liquidity is a within-symbol proxy, not cross-sectional capacity.
-- Reliability priors remain neutral and are not learned from out-of-sample results.
-- Online novelty may use earlier observations from the chronological test stream, which is point-in-time valid but differs from a frozen train-only normalization policy.
-- No portfolio capital, sizing, borrow, capacity, exposure, or realistic order-book spread model exists.
-- Split detection is heuristic and cannot replace vendor corporate-action metadata.
-- Family-level caps are deferred until more than one detector per family is enabled.
-- The additional controls and metrics have not demonstrated economic value on an untouched real-market dataset.
+- **Confirmed:** `precision` meant gross directional accuracy and `recall` used a sample-median opportunity definition.
+- **Files:** `mapi/research/backtest.py`, `mapi/models.py`, `mapi/config.py`, `tests/test_backtest.py`.
+- **Regression:** canonical fields are present and the legacy aliases are warning-labeled.
+- **Before/after:** reports expose `gross_directional_accuracy`, `net_profitable_event_rate`, and `large_move_capture_rate` over a fixed configured large-move threshold.
+- **Compatibility:** `precision`, `recall`, and `hit_rate` remain aliases for serialized consumers but are deprecated semantically.
+- **Uncertainty:** the fixed large-move threshold is not volatility-normalized and may not be comparable across symbols or regimes.
+
+## 8. Regime source integrity
+
+- **Confirmed:** an invalid benchmark bar silently substituted stock close into the benchmark-derived regime series.
+- **Files:** `mapi/regimes.py`, `mapi/scoring.py`, `mapi/models.py`, `tests/test_regime_frequency_realization.py`.
+- **Regression:** stale benchmark rows return `unknown`, `benchmark_stale`, confidence 0; no-benchmark runs explicitly return `stock_fallback`.
+- **Before/after:** benchmark and stock sources no longer switch within one regime series. Unknown regimes receive neutral dynamic-weight behavior.
+- **Compatibility:** regime detection now returns a three-column frame and signal JSON adds `regime_source` and `regime_confidence`.
+- **Uncertainty:** stock fallback confidence 0.6 is a transparent prior, not an empirically calibrated probability.
+
+## 9. Horizon frequency semantics
+
+- **Confirmed:** named horizons were bar counts without validating input frequency.
+- **Files:** `mapi/data/frequency.py`, `mapi/models.py`, `mapi/config.py`, `configs/mapi_v0_2.yaml`, `mapi/scoring.py`, `tests/test_regime_frequency_realization.py`.
+- **Regression:** daily-as-intraday and intraday-as-position conflicts are detected; warn mode zeros aggregate confidence and error mode fails.
+- **Before/after:** default horizons declare `intraday` or `daily` expectations based on median interval and output compatibility metadata.
+- **Compatibility:** custom horizons default to `expected_frequency="any"`; configured defaults may now warn or raise under the selected policy.
+- **Uncertainty:** median interval classification does not replace an exchange calendar and cannot fully characterize mixed sessions or overnight bars.
+
+## 10. Realization adjustment
+
+- **Confirmed:** `already_realized_score` was only a percentile of absolute trailing return and ignored anomaly direction and first detection.
+- **Files:** `mapi/realization.py`, `mapi/scoring.py`, `mapi/models.py`, `mapi/config.py`, `configs/mapi_v0_2.yaml`, `tests/test_regime_frequency_realization.py`, `tests/test_no_lookahead.py`.
+- **Regression:** bullish reversal, bearish reversal, bullish/bearish continuation, neutral direction, and future-mutation invariance.
+- **Before/after:** `recent_move_extremeness` is descriptive; actionability is reduced only by aligned movement since `anomaly_first_detected_at`, scaled by lagged historical movement.
+- **Compatibility:** `already_realized_score` remains an alias for `recent_move_extremeness`; old config key maps to `directional_realization_penalty`.
+- **Uncertainty:** direction may evolve after first detection, and the 90th-percentile movement scale is heuristic.
+
+## 11. Configuration validation and reliability
+
+- **Confirmed:** invalid enums, unknown components, weights, reliability, windows, thresholds, redundancy, and staleness values could pass silently; zero reliability retained half weight.
+- **Files:** `mapi/config.py`, `mapi/weights.py`, `mapi/scoring.py`, `mapi/components/__init__.py`, `mapi/components/base.py`, `tests/test_config_validation.py`.
+- **Regression:** invalid categories fail fast; unknown enabled components cannot be skipped; zero reliability produces zero dynamic weight.
+- **Before/after:** load and scoring validate the full contract. Reliability is now a direct `[0,1]` multiplier.
+- **Compatibility:** configurations relying on misspellings, zero total weight, out-of-range values, or the former 0.5 reliability floor now fail or score differently.
+- **Uncertainty:** configured reliability remains a subjective prior until estimated with walk-forward data.
+
+## 12. Ablation horizon and matching
+
+- **Confirmed:** ablation defaulted every horizon to five bars and compared variants at one numeric threshold.
+- **Files:** `mapi/research/ablation.py`, `mapi/research/matching.py`, `examples/run_backtest.py`, `tests/test_ablation.py`.
+- **Regression:** swing and position derive 20- and 60-bar defaults; rows include matched thresholds, frequencies, sample-count changes, and confidence intervals.
+- **Before/after:** each ablated variant matches full-MAPI fit frequency, freezes its threshold for test, and uses the configured horizon return window.
+- **Compatibility:** `backtest_horizon_bars=None` now derives from configuration; explicit positive overrides remain supported.
+- **Uncertainty:** removing a component can change direction and event identity even when aggregate frequency is matched.
+
+## 13. Python CI coverage
+
+- **Confirmed:** prior evidence covered local Python 3.13.1 only.
+- **Files:** `.github/workflows/ci.yml`, `pyproject.toml`, `tests/test_cli.py`, `tests/test_config_validation.py`.
+- **Regression:** CI matrix declares Python 3.12 and 3.13 and runs full `unittest`, full `pytest`, both CLI paths, and configuration validation.
+- **Before/after:** cross-version verification is automated on push and pull request instead of inferred from one local runtime.
+- **Compatibility:** CI installs the existing `.[dev]` extra; package runtime requirements are unchanged.
+- **Uncertainty:** CI results exist only after the branch is pushed and GitHub Actions runs; local verification remains Python 3.13.1 in this environment.
+
+## Remaining system-level limits
+
+- The event study is not a capital-aware portfolio simulator and does not model sizing, exposure, borrow, capacity, order-book spreads, or intrabar execution order.
+- UTC date checks are not an exchange calendar.
+- Optional news, fundamental, options, and sentiment components still require point-in-time data providers.
+- None of these source corrections demonstrates out-of-sample economic value.

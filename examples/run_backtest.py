@@ -15,6 +15,7 @@ from mapi.data.csv_provider import CsvPriceDataProvider
 from mapi.logging import configure_structured_logging
 from mapi.models import json_safe
 from mapi.research.backtest import compare_score_buckets, run_backtest
+from mapi.research.ablation import run_ablation
 from mapi.research.baselines import compare_baselines, random_control_distribution
 from mapi.scoring import calculate_mapi
 
@@ -32,6 +33,10 @@ def main() -> None:
     parser.add_argument("--config", default="configs/mapi_v0_2.yaml")
     parser.add_argument("--horizon", default="short_term")
     parser.add_argument("--score-threshold", type=float, default=60.0)
+    parser.add_argument(
+        "--score-column",
+        choices=("mapi_score", "mapi_raw_score", "mapi_actionability_score"),
+    )
     parser.add_argument("--output")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
@@ -41,6 +46,7 @@ def main() -> None:
     config = load_config(args.config)
     if args.horizon not in config.horizons:
         raise ValueError(f"Unknown horizon: {args.horizon}")
+    score_column_used = args.score_column or config.research_score_column
     prices = CsvPriceDataProvider(symbol_paths={args.symbol: args.prices}).get_ohlcv(
         args.symbol
     )
@@ -60,6 +66,10 @@ def main() -> None:
         transaction_cost_bps=config.transaction_cost_bps,
         spread_bps=config.spread_bps,
         slippage_bps=config.slippage_bps,
+        score_column=score_column_used,
+        large_move_threshold=config.large_move_threshold,
+        bootstrap_samples=config.bootstrap_samples,
+        bootstrap_seed=config.deterministic_seed,
     )
     buckets = compare_score_buckets(
         signals,
@@ -68,15 +78,14 @@ def main() -> None:
         transaction_cost_bps=config.transaction_cost_bps,
         spread_bps=config.spread_bps,
         slippage_bps=config.slippage_bps,
-    )
-    score_column = (
-        "mapi_actionability_score"
-        if "mapi_actionability_score" in signals.columns
-        else "mapi_score"
+        score_column=score_column_used,
+        large_move_threshold=config.large_move_threshold,
+        bootstrap_samples=config.bootstrap_samples,
+        bootstrap_seed=config.deterministic_seed,
     )
     signal_frequency = float(
         (
-            (signals[score_column] >= args.score_threshold)
+            (signals[score_column_used] >= args.score_threshold)
             & (signals["mapi_direction"].abs() >= 0.10)
         ).mean()
     )
@@ -87,28 +96,49 @@ def main() -> None:
         mapi_signals=signals,
         seed=config.deterministic_seed,
         signal_frequency=signal_frequency,
-        score_threshold=args.score_threshold,
+        reference_score_column=score_column_used,
+        reference_score_threshold=args.score_threshold,
         transaction_cost_bps=config.transaction_cost_bps,
         spread_bps=config.spread_bps,
         slippage_bps=config.slippage_bps,
+        large_move_threshold=config.large_move_threshold,
+        bootstrap_samples=config.bootstrap_samples,
+        bootstrap_seed=config.deterministic_seed,
     )
     random_rows = random_control_distribution(
         prices,
         horizon_bars=holding_bars,
         seeds=tuple(config.deterministic_seed + offset for offset in range(10)),
         signal_frequency=signal_frequency,
-        score_threshold=args.score_threshold,
+        mapi_signals=signals,
+        reference_score_column=score_column_used,
+        reference_score_threshold=args.score_threshold,
         transaction_cost_bps=config.transaction_cost_bps,
         spread_bps=config.spread_bps,
         slippage_bps=config.slippage_bps,
+        large_move_threshold=config.large_move_threshold,
+        bootstrap_samples=config.bootstrap_samples,
+        bootstrap_seed=config.deterministic_seed,
+    )
+    ablation_rows = run_ablation(
+        args.symbol,
+        prices,
+        _optional_csv(args.sector),
+        _optional_csv(args.benchmark),
+        config,
+        horizon_name=args.horizon,
+        score_column=score_column_used,
+        score_threshold=args.score_threshold,
     )
     result = {
+        "score_column_used": score_column_used,
         "metrics": metrics.to_dict(),
         "score_buckets": json_safe(buckets.to_dict(orient="records")),
         "baseline_comparisons": json_safe(baseline_rows.to_dict(orient="records")),
         "random_control_distribution": json_safe(
             random_rows.to_dict(orient="records")
         ),
+        "ablation": json_safe(ablation_rows.to_dict(orient="records")),
     }
     payload = json.dumps(result, indent=2, ensure_ascii=True)
     if args.output:

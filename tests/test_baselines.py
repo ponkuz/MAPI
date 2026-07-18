@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 import pandas as pd
 
-from mapi.research.baselines import generate_baselines, random_control_distribution
+from mapi.research.baselines import (
+    compare_baselines,
+    generate_baselines,
+    random_control_distribution,
+)
 from mapi.scoring import calculate_mapi
 from tests.helpers import make_ohlcv, small_config
 
@@ -57,6 +62,42 @@ class BaselineTests(unittest.TestCase):
         )
         self.assertEqual(first["seed"].tolist(), [10, 11, 12, 13])
         pd.testing.assert_frame_equal(first, second)
+
+    def test_baselines_fit_individual_thresholds_and_separate_buy_and_hold(self) -> None:
+        prices = make_ohlcv(120, seed=64)
+        index = pd.DatetimeIndex(prices["timestamp"])
+        mapi = pd.DataFrame(
+            {
+                "mapi_actionability_score": [20.0] * 84 + [80.0] * 36,
+                "mapi_direction": [1.0] * 120,
+                "mapi_confidence": [1.0] * 120,
+                "signal": [SimpleNamespace(anomaly_components=[])] * 120,
+            },
+            index=index,
+        )
+        rows = compare_baselines(
+            prices,
+            horizon_bars=3,
+            mapi_signals=mapi,
+            reference_score_column="mapi_actionability_score",
+            reference_score_threshold=60.0,
+            transaction_cost_bps=0.0,
+            spread_bps=0.0,
+            slippage_bps=0.0,
+            bootstrap_samples=50,
+        )
+        names = set(rows["name"])
+        self.assertIn("always_long_fixed_horizon", names)
+        self.assertIn("full_period_buy_and_hold", names)
+        self.assertNotIn("buy_and_hold", names)
+        event_rows = rows[rows["analysis_type"] == "event_study"]
+        for column in (
+            "fitted_threshold",
+            "candidate_test_frequency",
+            "selected_event_count",
+            "excluded_overlap_count",
+        ):
+            self.assertTrue(event_rows[column].notna().all())
 
 
 if __name__ == "__main__":

@@ -7,6 +7,12 @@ from mapi.data.alignment import align_point_in_time
 from mapi.data.validation import normalize_ohlcv
 from mapi.normalization import historical_zscore, rolling_percentile_rank
 from mapi.research.backtest import run_event_study
+from mapi.research.matching import (
+    candidate_frequency,
+    chronological_masks,
+    fit_frequency_matched_threshold,
+    test_only_signals,
+)
 
 
 def generate_baselines(
@@ -15,6 +21,7 @@ def generate_baselines(
     signal_frequency: float = 0.10,
     sector_frame: pd.DataFrame | None = None,
     mapi_signals: pd.DataFrame | None = None,
+    score_column: str = "mapi_score",
 ) -> dict[str, pd.DataFrame]:
     prices = normalize_ohlcv(price_frame) if "timestamp" in price_frame.columns else price_frame
     close = prices["close"]
@@ -37,7 +44,7 @@ def generate_baselines(
     baselines["moving_average_crossover"] = _moving_average_crossover(prices)
     baselines["rsi_reversal"] = _rsi_reversal(prices)
     baselines["macd_direction"] = _macd_direction(prices)
-    baselines["buy_and_hold"] = _frame(
+    baselines["always_long_fixed_horizon"] = _frame(
         prices.index,
         score=pd.Series(100.0, index=prices.index),
         direction=pd.Series(1.0, index=prices.index),
@@ -48,7 +55,9 @@ def generate_baselines(
         )
     if mapi_signals is not None:
         baselines["equal_weight_components"] = _equal_weight_components(mapi_signals)
-        baselines["shuffled_mapi_scores"] = _shuffled_mapi(mapi_signals, seed)
+        baselines["shuffled_mapi_scores"] = _shuffled_mapi(
+            mapi_signals, seed, score_column
+        )
         baselines["isolated_stock_sector_residual"] = _isolated_component(
             mapi_signals, "stock_sector_divergence"
         )
@@ -65,26 +74,80 @@ def compare_baselines(
     mapi_signals: pd.DataFrame | None = None,
     seed: int = 42,
     signal_frequency: float = 0.10,
+    reference_score_column: str = "mapi_score",
+    reference_score_threshold: float = 60.0,
+    min_direction: float = 0.10,
+    fit_fraction: float = 0.70,
     **event_study_kwargs: object,
 ) -> pd.DataFrame:
     """Evaluate each negative control under identical event-study assumptions."""
 
+    prices = normalize_ohlcv(price_frame) if "timestamp" in price_frame.columns else price_frame
+    fit_mask, test_mask = chronological_masks(prices.index, fit_fraction)
+    target_frequency = signal_frequency
+    if mapi_signals is not None:
+        target_frequency = candidate_frequency(
+            mapi_signals.reindex(prices.index),
+            reference_score_column,
+            reference_score_threshold,
+            min_direction,
+            fit_mask,
+        )
     rows: list[dict[str, object]] = []
     for name, signals in generate_baselines(
         price_frame,
         seed=seed,
-        signal_frequency=signal_frequency,
+        signal_frequency=target_frequency,
         sector_frame=sector_frame,
         mapi_signals=mapi_signals,
+        score_column=reference_score_column,
     ).items():
-        metrics = run_event_study(
+        match = fit_frequency_matched_threshold(
             signals,
-            price_frame,
+            "baseline_score",
+            target_frequency,
+            min_direction,
+            fit_mask,
+        )
+        evaluation_signals = test_only_signals(signals, test_mask)
+        metrics = run_event_study(
+            evaluation_signals,
+            prices,
             horizon_bars=horizon_bars,
             name=name,
+            score_threshold=match.threshold,
+            min_direction=min_direction,
+            score_column="baseline_score",
+            evaluation_mask=test_mask,
             **event_study_kwargs,
         )
-        rows.append(metrics.to_dict())
+        row = metrics.to_dict()
+        row.update(
+            {
+                "fitted_threshold": match.threshold,
+                "target_fit_frequency": target_frequency,
+                "candidate_fit_frequency": match.fitted_frequency,
+                "candidate_test_frequency": candidate_frequency(
+                    signals,
+                    "baseline_score",
+                    match.threshold,
+                    min_direction,
+                    test_mask,
+                ),
+                "selected_event_count": metrics.sample_count,
+                "excluded_overlap_count": metrics.overlapping_candidates_excluded,
+                "reference_score_column": reference_score_column,
+            }
+        )
+        rows.append(row)
+    rows.append(
+        _full_period_buy_and_hold(
+            prices,
+            test_mask,
+            event_study_kwargs,
+            reference_score_column,
+        )
+    )
     return pd.DataFrame(rows)
 
 
@@ -93,29 +156,73 @@ def random_control_distribution(
     horizon_bars: int,
     seeds: tuple[int, ...] = tuple(range(10)),
     signal_frequency: float = 0.10,
+    fit_fraction: float = 0.70,
+    min_direction: float = 0.10,
+    mapi_signals: pd.DataFrame | None = None,
+    reference_score_column: str = "mapi_score",
+    reference_score_threshold: float = 60.0,
     **event_study_kwargs: object,
 ) -> pd.DataFrame:
     """Return multiple deterministic random-control outcomes, one per seed."""
 
     prices = normalize_ohlcv(price_frame) if "timestamp" in price_frame.columns else price_frame
+    fit_mask, test_mask = chronological_masks(prices.index, fit_fraction)
+    target_frequency = signal_frequency
+    if mapi_signals is not None:
+        target_frequency = candidate_frequency(
+            mapi_signals.reindex(prices.index),
+            reference_score_column,
+            reference_score_threshold,
+            min_direction,
+            fit_mask,
+        )
     rows: list[dict[str, object]] = []
     for seed in seeds:
-        signals = _random_signal(prices.index, seed, signal_frequency)
-        metrics = run_event_study(
+        signals = _random_signal(prices.index, seed, target_frequency)
+        match = fit_frequency_matched_threshold(
             signals,
+            "baseline_score",
+            target_frequency,
+            min_direction,
+            fit_mask,
+        )
+        metrics = run_event_study(
+            test_only_signals(signals, test_mask),
             prices,
             horizon_bars=horizon_bars,
             name=f"random_seed_{seed}",
+            score_threshold=match.threshold,
+            min_direction=min_direction,
+            score_column="baseline_score",
+            evaluation_mask=test_mask,
             **event_study_kwargs,
         )
-        rows.append({"seed": seed, **metrics.to_dict()})
+        rows.append(
+            {
+                "seed": seed,
+                **metrics.to_dict(),
+                "fitted_threshold": match.threshold,
+                "target_fit_frequency": target_frequency,
+                "candidate_fit_frequency": match.fitted_frequency,
+                "candidate_test_frequency": candidate_frequency(
+                    signals,
+                    "baseline_score",
+                    match.threshold,
+                    min_direction,
+                    test_mask,
+                ),
+                "selected_event_count": metrics.sample_count,
+                "excluded_overlap_count": metrics.overlapping_candidates_excluded,
+                "reference_score_column": reference_score_column,
+            }
+        )
     return pd.DataFrame(rows)
 
 
 def _frame(index: pd.Index, score: pd.Series, direction: pd.Series | np.ndarray) -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "mapi_score": pd.Series(score, index=index).fillna(0.0).clip(0.0, 100.0),
+            "baseline_score": pd.Series(score, index=index).fillna(0.0).clip(0.0, 100.0),
             "mapi_direction": pd.Series(direction, index=index).fillna(0.0).clip(-1.0, 1.0),
             "mapi_confidence": 1.0,
         },
@@ -202,7 +309,7 @@ def _equal_weight_components(signals: pd.DataFrame) -> pd.DataFrame:
         confidences.append(float(np.mean([item.confidence for item in active])))
     return pd.DataFrame(
         {
-            "mapi_score": scores,
+            "baseline_score": scores,
             "mapi_direction": directions,
             "mapi_confidence": confidences,
         },
@@ -210,17 +317,15 @@ def _equal_weight_components(signals: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _shuffled_mapi(signals: pd.DataFrame, seed: int) -> pd.DataFrame:
+def _shuffled_mapi(
+    signals: pd.DataFrame, seed: int, score_column: str
+) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    source_score = (
-        signals["mapi_actionability_score"]
-        if "mapi_actionability_score" in signals.columns
-        else signals["mapi_score"]
-    )
+    source_score = signals[score_column]
     positions = rng.permutation(len(signals))
     return pd.DataFrame(
         {
-            "mapi_score": source_score.to_numpy()[positions],
+            "baseline_score": source_score.to_numpy()[positions],
             "mapi_direction": signals["mapi_direction"].to_numpy()[positions],
             "mapi_confidence": signals["mapi_confidence"].to_numpy()[positions],
         },
@@ -247,9 +352,45 @@ def _isolated_component(signals: pd.DataFrame, component_name: str) -> pd.DataFr
         confidences.append(component.confidence)
     return pd.DataFrame(
         {
-            "mapi_score": scores,
+            "baseline_score": scores,
             "mapi_direction": directions,
             "mapi_confidence": confidences,
         },
         index=signals.index,
     )
+
+
+def _full_period_buy_and_hold(
+    prices: pd.DataFrame,
+    test_mask: pd.Series,
+    event_study_kwargs: dict[str, object],
+    reference_score_column: str,
+) -> dict[str, object]:
+    test_prices = prices.loc[test_mask]
+    total_return = 0.0
+    if len(test_prices) >= 2 and float(test_prices["close"].iloc[0]) > 0.0:
+        total_return = float(
+            test_prices["close"].iloc[-1] / test_prices["close"].iloc[0] - 1.0
+        )
+        costs = sum(
+            float(event_study_kwargs.get(name, 0.0))
+            for name in ("transaction_cost_bps", "spread_bps", "slippage_bps")
+        ) / 10000.0
+        total_return -= costs
+    return {
+        "name": "full_period_buy_and_hold",
+        "analysis_type": "full_period_benchmark",
+        "sample_count": 1 if len(test_prices) >= 2 else 0,
+        "selected_event_count": 1 if len(test_prices) >= 2 else 0,
+        "total_return": total_return,
+        "mean_return": total_return,
+        "fitted_threshold": None,
+        "target_fit_frequency": None,
+        "candidate_fit_frequency": None,
+        "candidate_test_frequency": 1.0 if len(test_prices) >= 2 else 0.0,
+        "excluded_overlap_count": 0,
+        "reference_score_column": reference_score_column,
+        "warnings": [
+            "Full-period buy-and-hold is a capital-path benchmark, not an event study."
+        ],
+    }

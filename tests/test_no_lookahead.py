@@ -111,7 +111,7 @@ class NoLookaheadTests(unittest.TestCase):
                         atol=1e-12,
                     )
 
-    def test_already_realized_score_uses_no_future_rows(self) -> None:
+    def test_realization_fields_use_no_future_rows(self) -> None:
         cutoff = 80
         prices = make_ohlcv(120, seed=33)
         config = small_config(include_cross_asset=False)
@@ -122,6 +122,14 @@ class NoLookaheadTests(unittest.TestCase):
         pd.testing.assert_series_equal(
             original["already_realized_score"].iloc[:cutoff],
             changed["already_realized_score"].iloc[:cutoff],
+        )
+        pd.testing.assert_series_equal(
+            original["recent_move_extremeness"].iloc[:cutoff],
+            changed["recent_move_extremeness"].iloc[:cutoff],
+        )
+        pd.testing.assert_series_equal(
+            original["directional_realization_score"].iloc[:cutoff],
+            changed["directional_realization_score"].iloc[:cutoff],
         )
         pd.testing.assert_series_equal(
             original["mapi_actionability_score"].iloc[:cutoff],

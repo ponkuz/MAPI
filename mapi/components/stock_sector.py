@@ -11,7 +11,7 @@ from mapi.components.base import (
 from mapi.config import MapiConfig
 from mapi.data.alignment import align_point_in_time
 from mapi.models import HorizonConfig
-from mapi.normalization import historical_zscore, rolling_percentile_rank, signed_unit_from_z
+from mapi.normalization import event_novelty, historical_zscore, signed_unit_from_z
 
 
 class StockSectorDivergence:
@@ -44,7 +44,7 @@ class StockSectorDivergence:
 
         rolling_cov = stock_return.rolling(
             horizon.rolling_window, min_periods=horizon.min_periods
-        ).cov(sector_return)
+        ).cov(sector_return, ddof=0)
         rolling_var = sector_return.rolling(
             horizon.rolling_window, min_periods=horizon.min_periods
         ).var(ddof=0)
@@ -64,7 +64,10 @@ class StockSectorDivergence:
         corr = stock_return.rolling(
             horizon.rolling_window, min_periods=horizon.min_periods
         ).corr(sector_return)
-        corr_breakdown = (1.0 - corr.abs()).clip(0.0, 1.0)
+        historical_corr_baseline = corr.abs().rolling(
+            horizon.rolling_window, min_periods=horizon.min_periods
+        ).median().shift(1)
+        corr_breakdown = (historical_corr_baseline - corr.abs()).clip(0.0, 1.0)
         strength = pd.concat([strength, corr_breakdown * 0.65], axis=1).max(axis=1)
         confidence = (
             alignment.valid.rolling(horizon.rolling_window, min_periods=1).mean()
@@ -72,9 +75,9 @@ class StockSectorDivergence:
             * alignment.valid.astype(float)
             * (residual_z.notna() | corr.notna()).astype(float)
         ).clip(0.0, 0.9)
-        novelty = rolling_percentile_rank(
+        novelty = event_novelty(
             strength, horizon.rolling_window, horizon.min_periods
-        ).fillna(strength)
+        )
         labels = np.select(
             [
                 residual_z > 1.2,
@@ -107,6 +110,12 @@ class StockSectorDivergence:
                 if pd.notna(residual_z.iloc[i])
                 else None,
                 "rolling_correlation": float(corr.iloc[i]) if pd.notna(corr.iloc[i]) else None,
+                "historical_correlation_baseline": float(historical_corr_baseline.iloc[i])
+                if pd.notna(historical_corr_baseline.iloc[i])
+                else None,
+                "correlation_decline": float(corr_breakdown.iloc[i])
+                if pd.notna(corr_breakdown.iloc[i])
+                else None,
                 "matched_timestamp": alignment.frame["matched_timestamp"].iloc[i],
                 "staleness_seconds": float(alignment.staleness_seconds.iloc[i])
                 if pd.notna(alignment.staleness_seconds.iloc[i])
@@ -120,7 +129,9 @@ class StockSectorDivergence:
                 "anomaly_strength": strength,
                 "direction": direction,
                 "confidence": confidence,
-                "novelty": novelty,
+                "novelty": novelty["novelty"].fillna(0.0),
+                "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),
+                "recurrence_rate": novelty["recurrence_rate"].fillna(0.0),
                 "reason": labels,
                 "metrics": metrics,
             },

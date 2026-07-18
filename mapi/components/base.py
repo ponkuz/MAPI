@@ -38,6 +38,8 @@ def empty_component_frame(index: pd.Index, reason: str = "") -> pd.DataFrame:
             "direction": 0.0,
             "confidence": 0.0,
             "novelty": 0.0,
+            "historical_extremeness": 0.0,
+            "recurrence_rate": 0.0,
             "reason": reason,
             "metrics": [{} for _ in range(len(index))],
         },
@@ -56,6 +58,8 @@ def finalize_component_frame(
         "direction": 0.0,
         "confidence": 0.0,
         "novelty": 0.0,
+        "historical_extremeness": 0.0,
+        "recurrence_rate": 0.0,
     }.items():
         if column not in output:
             output[column] = default
@@ -74,4 +78,3 @@ def finalize_component_frame(
         output["metrics"] = [{} for _ in range(len(output))]
     output["metrics"] = output["metrics"].apply(lambda value: value if isinstance(value, dict) else {})
     return output
-

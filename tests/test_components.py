@@ -23,7 +23,13 @@ class ComponentTests(unittest.TestCase):
             self.config,
         )
         self.assertEqual(len(result), len(self.prices))
-        for column in ("anomaly_strength", "confidence", "novelty"):
+        for column in (
+            "anomaly_strength",
+            "confidence",
+            "novelty",
+            "historical_extremeness",
+            "recurrence_rate",
+        ):
             self.assertTrue(result[column].between(0.0, 1.0).all())
         self.assertTrue(result["direction"].between(-1.0, 1.0).all())
 

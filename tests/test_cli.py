@@ -81,6 +81,39 @@ class CliEndToEndTests(unittest.TestCase):
                 root,
             )
             backtest_payload = json.loads(backtest_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                backtest_payload["score_column_used"], "mapi_actionability_score"
+            )
+            self.assertEqual(
+                backtest_payload["metrics"]["score_column_used"],
+                backtest_payload["score_column_used"],
+            )
+            self.assertTrue(
+                all(
+                    row["score_column_used"] == backtest_payload["score_column_used"]
+                    for row in backtest_payload["score_buckets"]
+                )
+            )
+            self.assertTrue(
+                all(
+                    row["reference_score_column"]
+                    == backtest_payload["score_column_used"]
+                    for row in backtest_payload["baseline_comparisons"]
+                )
+            )
+            self.assertTrue(
+                all(
+                    row["reference_score_column"]
+                    == backtest_payload["score_column_used"]
+                    for row in backtest_payload["random_control_distribution"]
+                )
+            )
+            self.assertTrue(
+                all(
+                    row["score_column_used"] == backtest_payload["score_column_used"]
+                    for row in backtest_payload["ablation"]
+                )
+            )
             self.assertEqual(backtest_payload["metrics"]["analysis_type"], "event_study")
             self.assertEqual(len(backtest_payload["random_control_distribution"]), 10)
             baseline_names = {

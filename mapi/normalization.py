@@ -44,6 +44,66 @@ def rolling_percentile_rank(
     return series.rolling(window, min_periods=min_periods).apply(rank_last, raw=True)
 
 
+def prior_percentile_rank(
+    series: pd.Series,
+    window: int,
+    min_periods: int | None = None,
+    tie_tolerance: float = 1e-12,
+) -> pd.Series:
+    """Rank the current value against prior-only history using mid-rank ties."""
+
+    min_periods = min_periods or max(3, window // 4)
+    values = series.astype(float).to_numpy()
+    output = np.full(len(values), np.nan, dtype=float)
+    for index, current in enumerate(values):
+        if not np.isfinite(current):
+            continue
+        history = values[max(0, index - window) : index]
+        history = history[np.isfinite(history)]
+        if len(history) < min_periods:
+            continue
+        ties = np.isclose(history, current, rtol=0.0, atol=tie_tolerance)
+        less = history < (current - tie_tolerance)
+        output[index] = (float(less.sum()) + 0.5 * float(ties.sum())) / len(history)
+    return pd.Series(output, index=series.index, name="historical_extremeness")
+
+
+def event_novelty(
+    series: pd.Series,
+    window: int,
+    min_periods: int | None = None,
+    recurrence_tolerance: float = 0.05,
+    tie_tolerance: float = 1e-12,
+) -> pd.DataFrame:
+    """Separate prior-only extremeness from recurrence-adjusted event novelty."""
+
+    min_periods = min_periods or max(3, window // 4)
+    extremeness = prior_percentile_rank(
+        series,
+        window=window,
+        min_periods=min_periods,
+        tie_tolerance=tie_tolerance,
+    )
+    values = series.astype(float).to_numpy()
+    recurrence = np.full(len(values), np.nan, dtype=float)
+    for index, current in enumerate(values):
+        if not np.isfinite(current):
+            continue
+        history = values[max(0, index - window) : index]
+        history = history[np.isfinite(history)]
+        if len(history) < min_periods:
+            continue
+        recurrence[index] = float(
+            np.mean(np.abs(history - current) <= recurrence_tolerance)
+        )
+    recurrence_rate = pd.Series(
+        recurrence, index=series.index, name="recurrence_rate"
+    )
+    novelty = (extremeness * (1.0 - recurrence_rate)).clip(0.0, 1.0)
+    novelty.name = "novelty"
+    return pd.concat([extremeness, recurrence_rate, novelty], axis=1)
+
+
 def robust_unit_score_from_z(zscore: pd.Series, cap: float = 3.0) -> pd.Series:
     return (zscore.abs() / cap).clip(lower=0.0, upper=1.0).fillna(0.0)
 
@@ -76,4 +136,3 @@ def true_range(frame: pd.DataFrame) -> pd.Series:
         axis=1,
     )
     return ranges.max(axis=1)
-

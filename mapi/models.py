@@ -37,6 +37,7 @@ class HorizonConfig:
     return_window: int
     rolling_window: int
     min_periods: int
+    expected_frequency: str = "any"
 
 
 @dataclass
@@ -48,6 +49,8 @@ class ComponentSignal:
     confidence: float
     weight: float
     novelty: float
+    historical_extremeness: float
+    recurrence_rate: float
     redundancy_penalty: float
     reason: str = ""
     metrics: dict[str, Any] = field(default_factory=dict)
@@ -73,6 +76,10 @@ class ComponentSignal:
                 "confidence": clamp(self.confidence, 0.0, 1.0),
                 "weight": clamp(self.weight, 0.0, 1.0),
                 "novelty": clamp(self.novelty, 0.0, 1.0),
+                "historical_extremeness": clamp(
+                    self.historical_extremeness, 0.0, 1.0
+                ),
+                "recurrence_rate": clamp(self.recurrence_rate, 0.0, 1.0),
                 "redundancy_penalty": clamp(self.redundancy_penalty, 0.0, 1.0),
                 "effective_score": self.effective_score,
                 "reason": self.reason,
@@ -93,6 +100,8 @@ class MapiSignal:
     mapi_direction: float
     mapi_confidence: float
     mapi_regime: str
+    regime_source: str
+    regime_confidence: float
     anomaly_components: list[ComponentSignal]
     dominant_anomalies: list[str]
     data_quality_score: float
@@ -104,7 +113,13 @@ class MapiSignal:
     anomaly_age_bars: int
     anomaly_trend: str
     confirmation_count: int
+    recent_move_extremeness: float
+    directional_move_since_detection: float
+    directional_realization_score: float
     already_realized_score: float
+    input_interval_seconds: float | None
+    horizon_frequency_compatible: bool
+    horizon_warning: str | None
     machine_reasons: list[dict[str, Any]]
     human_summary: str
 
@@ -122,6 +137,10 @@ class MapiSignal:
                 "mapi_direction": round(clamp(self.mapi_direction, -1.0, 1.0), 4),
                 "mapi_confidence": round(clamp(self.mapi_confidence, 0.0, 1.0), 4),
                 "mapi_regime": self.mapi_regime,
+                "regime_source": self.regime_source,
+                "regime_confidence": round(
+                    clamp(self.regime_confidence, 0.0, 1.0), 4
+                ),
                 "anomaly_components": [
                     component.to_dict() for component in self.anomaly_components
                 ],
@@ -139,9 +158,21 @@ class MapiSignal:
                 "anomaly_age_bars": self.anomaly_age_bars,
                 "anomaly_trend": self.anomaly_trend,
                 "confirmation_count": self.confirmation_count,
+                "recent_move_extremeness": round(
+                    clamp(self.recent_move_extremeness, 0.0, 1.0), 4
+                ),
+                "directional_move_since_detection": round(
+                    self.directional_move_since_detection, 6
+                ),
+                "directional_realization_score": round(
+                    clamp(self.directional_realization_score, 0.0, 1.0), 4
+                ),
                 "already_realized_score": round(
                     clamp(self.already_realized_score, 0.0, 1.0), 4
                 ),
+                "input_interval_seconds": self.input_interval_seconds,
+                "horizon_frequency_compatible": self.horizon_frequency_compatible,
+                "horizon_warning": self.horizon_warning,
                 "machine_reasons": self.machine_reasons,
                 "human_summary": self.human_summary,
             }
@@ -155,33 +186,82 @@ class BacktestMetrics:
     sample_count: int
     mean_return: float
     median_return: float
-    hit_rate: float
-    sharpe_ratio: float
-    sortino_ratio: float
+    gross_directional_accuracy: float
+    net_profitable_event_rate: float
+    large_move_capture_rate: float
+    event_return_mean_to_std: float
+    event_return_mean_to_downside_std: float
+    mean_return_ci_lower: float
+    mean_return_ci_upper: float
+    bootstrap_samples: int
     maximum_drawdown: float
     profit_factor: float
-    precision: float
-    recall: float
     information_coefficient: float
-    mean_mfe: float
-    mean_mae: float
+    mean_intrabar_mfe: float
+    mean_intrabar_mae: float
     mean_absolute_return: float
     mean_future_volatility: float
-    breakout_rate: float
+    intrabar_breakout_rate: float
     reversal_rate: float
     mean_time_to_move: float
     analysis_type: str = "event_study"
     non_overlapping: bool = True
     overlapping_candidates_excluded: int = 0
+    score_column_used: str = "mapi_score"
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def hit_rate(self) -> float:
+        return self.net_profitable_event_rate
+
+    @property
+    def sharpe_ratio(self) -> float:
+        return self.event_return_mean_to_std
+
+    @property
+    def sortino_ratio(self) -> float:
+        return self.event_return_mean_to_downside_std
+
+    @property
+    def precision(self) -> float:
+        return self.gross_directional_accuracy
+
+    @property
+    def recall(self) -> float:
+        return self.large_move_capture_rate
+
+    @property
+    def mean_mfe(self) -> float:
+        return self.mean_intrabar_mfe
+
+    @property
+    def mean_mae(self) -> float:
+        return self.mean_intrabar_mae
+
+    @property
+    def breakout_rate(self) -> float:
+        return self.intrabar_breakout_rate
 
     def to_dict(self) -> dict[str, Any]:
         payload = dict(self.__dict__)
         payload.update(
             {
-                "event_return_sharpe": self.sharpe_ratio,
+                "hit_rate": self.hit_rate,
+                "sharpe_ratio": self.sharpe_ratio,
+                "sortino_ratio": self.sortino_ratio,
+                "precision": self.precision,
+                "recall": self.recall,
+                "mean_mfe": self.mean_mfe,
+                "mean_mae": self.mean_mae,
+                "breakout_rate": self.breakout_rate,
+                "event_return_sharpe": self.event_return_mean_to_std,
                 "event_sequence_drawdown": self.maximum_drawdown,
                 "event_profit_factor": self.profit_factor,
             }
         )
+        compatibility_warning = (
+            "Legacy hit_rate/precision/recall/Sharpe/Sortino/MFE/MAE/breakout "
+            "fields are compatibility aliases; use the explicitly named event metrics."
+        )
+        payload["warnings"] = [*self.warnings, compatibility_warning]
         return json_safe(payload)

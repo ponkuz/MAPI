@@ -1,0 +1,70 @@
+from __future__ import annotations
+
+import unittest
+
+import pandas as pd
+
+from mapi.config import MapiConfig
+from mapi.data.frequency import validate_horizon_frequency
+from mapi.data.validation import normalize_ohlcv
+from mapi.models import HorizonConfig
+from mapi.realization import directional_realization_score
+from mapi.regimes import detect_market_regime
+from mapi.scoring import calculate_mapi
+from tests.helpers import make_ohlcv
+
+
+class RegimeFrequencyRealizationTests(unittest.TestCase):
+    def test_stale_benchmark_is_unknown_without_stock_substitution(self) -> None:
+        prices = normalize_ohlcv(make_ohlcv(120, seed=201))
+        benchmark = normalize_ohlcv(make_ohlcv(120, seed=202)).iloc[:-3]
+        horizon = HorizonConfig("test", 3, 30, 10)
+        regimes = detect_market_regime(prices, benchmark, horizon, MapiConfig())
+        self.assertEqual(regimes["regime"].iloc[-1], "unknown")
+        self.assertEqual(regimes["regime_source"].iloc[-1], "benchmark_stale")
+        self.assertEqual(float(regimes["regime_confidence"].iloc[-1]), 0.0)
+
+    def test_stock_fallback_is_explicit_only_without_benchmark(self) -> None:
+        prices = normalize_ohlcv(make_ohlcv(120, seed=203))
+        horizon = HorizonConfig("test", 3, 30, 10)
+        regimes = detect_market_regime(prices, None, horizon, MapiConfig())
+        self.assertEqual(regimes["regime_source"].iloc[-1], "stock_fallback")
+        self.assertAlmostEqual(float(regimes["regime_confidence"].iloc[-1]), 0.6)
+
+    def test_daily_and_intraday_horizon_mismatches_are_detected(self) -> None:
+        daily = pd.date_range("2025-01-01", periods=20, freq="B", tz="UTC")
+        intraday = pd.date_range("2025-01-01", periods=20, freq="30min", tz="UTC")
+        intraday_horizon = HorizonConfig(
+            "intraday", 1, 10, 4, expected_frequency="intraday"
+        )
+        position_horizon = HorizonConfig(
+            "position", 4, 10, 4, expected_frequency="daily"
+        )
+        self.assertFalse(validate_horizon_frequency(daily, intraday_horizon).compatible)
+        self.assertFalse(validate_horizon_frequency(intraday, position_horizon).compatible)
+
+    def test_frequency_mismatch_warns_or_fails_according_to_config(self) -> None:
+        config = MapiConfig()
+        config.horizons = {
+            "intraday": HorizonConfig(
+                "intraday", 1, 10, 4, expected_frequency="intraday"
+            )
+        }
+        warned = calculate_mapi("TEST", make_ohlcv(30), config=config)["intraday"]
+        self.assertFalse(bool(warned["horizon_frequency_compatible"].iloc[-1]))
+        self.assertEqual(float(warned["mapi_confidence"].iloc[-1]), 0.0)
+        self.assertIsNotNone(warned["horizon_warning"].iloc[-1])
+        config.frequency_mismatch_policy = "error"
+        with self.assertRaisesRegex(ValueError, "expects intraday"):
+            calculate_mapi("TEST", make_ohlcv(30), config=config)
+
+    def test_directional_realization_penalizes_only_aligned_continuation(self) -> None:
+        self.assertEqual(directional_realization_score(1.0, -0.03, 0.05), 0.0)
+        self.assertEqual(directional_realization_score(-1.0, 0.03, 0.05), 0.0)
+        self.assertAlmostEqual(directional_realization_score(1.0, 0.03, 0.05), 0.6)
+        self.assertAlmostEqual(directional_realization_score(-1.0, -0.03, 0.05), 0.6)
+        self.assertEqual(directional_realization_score(0.0, 0.50, 0.05), 0.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

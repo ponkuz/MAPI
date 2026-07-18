@@ -20,22 +20,28 @@ def run_event_study(
     spread_bps: float = 2.0,
     slippage_bps: float = 5.0,
     allow_overlapping: bool = False,
-    score_column: str | None = None,
+    score_column: str = "mapi_score",
+    large_move_threshold: float = 0.02,
+    bootstrap_samples: int = 1000,
+    bootstrap_seed: int = 42,
+    evaluation_mask: pd.Series | None = None,
 ) -> BacktestMetrics:
     """Evaluate signal events; this is not a capital-aware portfolio simulation."""
 
     prices = normalize_ohlcv(price_frame) if "timestamp" in price_frame.columns else price_frame
     aligned = signals.reindex(prices.index)
-    selected_score_column = score_column or (
-        "mapi_actionability_score"
-        if "mapi_actionability_score" in aligned.columns
-        else "mapi_score"
-    )
-    score = aligned[selected_score_column].fillna(0.0)
+    if score_column not in aligned.columns:
+        raise ValueError(f"Score column is unavailable: {score_column}")
+    score = aligned[score_column].fillna(0.0)
     direction = aligned["mapi_direction"].fillna(0.0).clip(-1.0, 1.0)
+    evaluation = (
+        evaluation_mask.reindex(prices.index, fill_value=False).astype(bool)
+        if evaluation_mask is not None
+        else pd.Series(True, index=prices.index)
+    )
     candidate_side = pd.Series(
         np.where(
-        (score >= score_threshold) & (direction.abs() >= min_direction),
+        evaluation & (score >= score_threshold) & (direction.abs() >= min_direction),
         np.sign(direction),
         0.0,
         ),
@@ -74,36 +80,42 @@ def run_event_study(
             sample_count=0,
             mean_return=0.0,
             median_return=0.0,
-            hit_rate=0.0,
-            sharpe_ratio=0.0,
-            sortino_ratio=0.0,
+            gross_directional_accuracy=0.0,
+            net_profitable_event_rate=0.0,
+            large_move_capture_rate=0.0,
+            event_return_mean_to_std=0.0,
+            event_return_mean_to_downside_std=0.0,
+            mean_return_ci_lower=0.0,
+            mean_return_ci_upper=0.0,
+            bootstrap_samples=bootstrap_samples,
             maximum_drawdown=0.0,
             profit_factor=0.0,
-            precision=0.0,
-            recall=0.0,
             information_coefficient=0.0,
-            mean_mfe=0.0,
-            mean_mae=0.0,
+            mean_intrabar_mfe=0.0,
+            mean_intrabar_mae=0.0,
             mean_absolute_return=0.0,
             mean_future_volatility=0.0,
-            breakout_rate=0.0,
+            intrabar_breakout_rate=0.0,
             reversal_rate=0.0,
             mean_time_to_move=0.0,
             non_overlapping=not allow_overlapping,
             overlapping_candidates_excluded=excluded_overlap,
+            score_column_used=score_column,
             warnings=warnings,
         )
 
     sample_count = int(trades.count())
     mean_return = float(trades.mean())
     median_return = float(trades.median())
-    hit_rate = float((trades > 0).mean())
+    net_profitable_event_rate = float((trades > 0).mean())
     std = float(trades.std(ddof=0))
-    annualizer = np.sqrt(max(1.0, 252.0 / max(1, horizon_bars)))
-    sharpe = float(mean_return / std * annualizer) if std > 0 else 0.0
+    mean_to_std = float(mean_return / std) if std > 0 else 0.0
     downside = trades[trades < 0]
     downside_std = float(downside.std(ddof=0)) if not downside.empty else 0.0
-    sortino = float(mean_return / downside_std * annualizer) if downside_std > 0 else 0.0
+    mean_to_downside = float(mean_return / downside_std) if downside_std > 0 else 0.0
+    ci_lower, ci_upper = _bootstrap_mean_ci(
+        trades, samples=bootstrap_samples, seed=bootstrap_seed
+    )
     equity = (1.0 + trades.fillna(0.0)).cumprod()
     drawdown = equity / equity.cummax() - 1.0
     max_drawdown = float(drawdown.min()) if not drawdown.empty else 0.0
@@ -113,15 +125,20 @@ def run_event_study(
     realized = labels["forward_return"].reindex(trades.index)
     trade_side = side.reindex(trades.index)
     correct_direction = np.sign(realized) == np.sign(trade_side)
-    precision = float(correct_direction.mean()) if len(correct_direction) else 0.0
-    opportunity_cutoff = labels["forward_return"].abs().median()
-    opportunities = labels["forward_return"].abs() >= opportunity_cutoff
+    gross_directional_accuracy = (
+        float(correct_direction.mean()) if len(correct_direction) else 0.0
+    )
+    opportunities = (
+        evaluation & (labels["forward_return"].abs() >= large_move_threshold)
+    )
     correct_opportunities = (
         opportunities
         & (side != 0.0)
         & (np.sign(labels["forward_return"]) == np.sign(side))
     )
-    recall = float(correct_opportunities.sum() / max(1, opportunities.sum()))
+    large_move_capture_rate = float(
+        correct_opportunities.sum() / max(1, opportunities.sum())
+    )
     prediction = (score * direction).where(selected).replace([np.inf, -np.inf], np.nan)
     ic_frame = pd.concat([prediction, labels["forward_return"]], axis=1).dropna()
     has_ic_variation = (
@@ -136,11 +153,19 @@ def run_event_study(
     )
     trade_labels = labels.reindex(trades.index)
     directional_mfe = pd.Series(
-        np.where(trade_side > 0, trade_labels["mfe"], -trade_labels["mae"]),
+        np.where(
+            trade_side > 0,
+            trade_labels["intrabar_mfe"],
+            -trade_labels["intrabar_mae"],
+        ),
         index=trades.index,
     )
     directional_mae = pd.Series(
-        np.where(trade_side > 0, trade_labels["mae"], -trade_labels["mfe"]),
+        np.where(
+            trade_side > 0,
+            trade_labels["intrabar_mae"],
+            -trade_labels["intrabar_mfe"],
+        ),
         index=trades.index,
     )
     return BacktestMetrics(
@@ -149,23 +174,27 @@ def run_event_study(
         sample_count=sample_count,
         mean_return=mean_return,
         median_return=median_return,
-        hit_rate=hit_rate,
-        sharpe_ratio=sharpe,
-        sortino_ratio=sortino,
+        gross_directional_accuracy=gross_directional_accuracy,
+        net_profitable_event_rate=net_profitable_event_rate,
+        large_move_capture_rate=large_move_capture_rate,
+        event_return_mean_to_std=mean_to_std,
+        event_return_mean_to_downside_std=mean_to_downside,
+        mean_return_ci_lower=ci_lower,
+        mean_return_ci_upper=ci_upper,
+        bootstrap_samples=bootstrap_samples,
         maximum_drawdown=max_drawdown,
         profit_factor=float(profit_factor),
-        precision=precision,
-        recall=recall,
         information_coefficient=information_coefficient,
-        mean_mfe=float(directional_mfe.mean()) if not directional_mfe.empty else 0.0,
-        mean_mae=float(directional_mae.mean()) if not directional_mae.empty else 0.0,
+        mean_intrabar_mfe=float(directional_mfe.mean()) if not directional_mfe.empty else 0.0,
+        mean_intrabar_mae=float(directional_mae.mean()) if not directional_mae.empty else 0.0,
         mean_absolute_return=float(trade_labels["absolute_return"].mean()),
         mean_future_volatility=float(trade_labels["future_volatility"].mean()),
-        breakout_rate=float(trade_labels["breakout"].mean()),
+        intrabar_breakout_rate=float(trade_labels["intrabar_breakout"].mean()),
         reversal_rate=float(trade_labels["reversal"].mean()),
         mean_time_to_move=float(trade_labels["time_to_move"].mean()),
         non_overlapping=not allow_overlapping,
         overlapping_candidates_excluded=excluded_overlap,
+        score_column_used=score_column,
         warnings=warnings,
     )
 
@@ -182,7 +211,11 @@ def run_backtest(
     spread_bps: float = 2.0,
     slippage_bps: float = 5.0,
     allow_overlapping: bool = False,
-    score_column: str | None = None,
+    score_column: str = "mapi_score",
+    large_move_threshold: float = 0.02,
+    bootstrap_samples: int = 1000,
+    bootstrap_seed: int = 42,
+    evaluation_mask: pd.Series | None = None,
 ) -> BacktestMetrics:
     """Compatibility wrapper for the event-study engine."""
 
@@ -199,6 +232,10 @@ def run_backtest(
         slippage_bps=slippage_bps,
         allow_overlapping=allow_overlapping,
         score_column=score_column,
+        large_move_threshold=large_move_threshold,
+        bootstrap_samples=bootstrap_samples,
+        bootstrap_seed=bootstrap_seed,
+        evaluation_mask=evaluation_mask,
     )
 
 
@@ -230,3 +267,16 @@ def compare_score_buckets(
         row["bucket"] = f"{left}-{right - 1}"
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _bootstrap_mean_ci(
+    returns: pd.Series, samples: int, seed: int
+) -> tuple[float, float]:
+    values = returns.dropna().to_numpy(dtype=float)
+    if len(values) == 0:
+        return 0.0, 0.0
+    rng = np.random.default_rng(seed)
+    indices = rng.integers(0, len(values), size=(samples, len(values)))
+    means = values[indices].mean(axis=1)
+    lower, upper = np.quantile(means, [0.025, 0.975])
+    return float(lower), float(upper)

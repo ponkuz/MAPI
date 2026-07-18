@@ -28,8 +28,8 @@ def forward_path_metrics(
 
     prices = normalize_ohlcv(price_frame) if "timestamp" in price_frame.columns else price_frame
     close = prices["close"].reset_index(drop=True)
-    mfe: list[float] = []
-    mae: list[float] = []
+    intrabar_mfe: list[float] = []
+    intrabar_mae: list[float] = []
     realized: list[float] = []
     absolute_return: list[float] = []
     future_volatility: list[float] = []
@@ -40,8 +40,8 @@ def forward_path_metrics(
         entry_idx = i + signal_delay_bars
         exit_idx = entry_idx + horizon_bars
         if exit_idx >= len(close) or entry_idx >= len(close):
-            mfe.append(np.nan)
-            mae.append(np.nan)
+            intrabar_mfe.append(np.nan)
+            intrabar_mae.append(np.nan)
             realized.append(np.nan)
             absolute_return.append(np.nan)
             future_volatility.append(np.nan)
@@ -52,8 +52,8 @@ def forward_path_metrics(
         entry = close.iloc[entry_idx]
         path = close.iloc[entry_idx : exit_idx + 1]
         if entry == 0 or pd.isna(entry):
-            mfe.append(np.nan)
-            mae.append(np.nan)
+            intrabar_mfe.append(np.nan)
+            intrabar_mae.append(np.nan)
             realized.append(np.nan)
             absolute_return.append(np.nan)
             future_volatility.append(np.nan)
@@ -63,15 +63,21 @@ def forward_path_metrics(
             continue
         path_return = path / entry - 1.0
         realized_value = float(path_return.iloc[-1])
-        mfe.append(float(path_return.max()))
-        mae.append(float(path_return.min()))
+        future_high = prices["high"].iloc[entry_idx + 1 : exit_idx + 1]
+        future_low = prices["low"].iloc[entry_idx + 1 : exit_idx + 1]
+        intrabar_mfe.append(float((future_high / entry - 1.0).max()))
+        intrabar_mae.append(float((future_low / entry - 1.0).min()))
         realized.append(realized_value)
         absolute_return.append(abs(realized_value))
         future_volatility.append(float(path.pct_change().dropna().std(ddof=0)))
 
-        history = close.iloc[max(0, i - 20) : i]
-        if len(history) >= 5:
-            broke_range = path.max() > history.max() or path.min() < history.min()
+        history_high = prices["high"].iloc[max(0, i - 19) : i + 1]
+        history_low = prices["low"].iloc[max(0, i - 19) : i + 1]
+        if len(history_high) >= 5:
+            broke_range = (
+                future_high.max() > history_high.max()
+                or future_low.min() < history_low.min()
+            )
             breakout.append(float(broke_range))
         else:
             breakout.append(np.nan)
@@ -87,8 +93,12 @@ def forward_path_metrics(
         else:
             reversal.append(np.nan)
 
-        reached = np.flatnonzero(path_return.to_numpy()[1:] >= movement_threshold)
-        reached_down = np.flatnonzero(path_return.to_numpy()[1:] <= -movement_threshold)
+        reached = np.flatnonzero(
+            (future_high / entry - 1.0).to_numpy() >= movement_threshold
+        )
+        reached_down = np.flatnonzero(
+            (future_low / entry - 1.0).to_numpy() <= -movement_threshold
+        )
         candidates = [
             int(values[0] + 1) for values in (reached, reached_down) if len(values) > 0
         ]
@@ -98,11 +108,15 @@ def forward_path_metrics(
             "forward_return": realized,
             "absolute_return": absolute_return,
             "future_volatility": future_volatility,
-            "breakout": breakout,
+            "intrabar_breakout": breakout,
             "reversal": reversal,
             "time_to_move": time_to_move,
-            "mfe": mfe,
-            "mae": mae,
+            "intrabar_mfe": intrabar_mfe,
+            "intrabar_mae": intrabar_mae,
+            # Compatibility aliases retain values, not the former close-only semantics.
+            "breakout": breakout,
+            "mfe": intrabar_mfe,
+            "mae": intrabar_mae,
         },
         index=prices.index,
     )

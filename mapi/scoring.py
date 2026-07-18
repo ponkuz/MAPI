@@ -5,19 +5,25 @@ from typing import Iterable
 import pandas as pd
 
 from mapi.components import (
+    FundamentalExpectationsDivergence,
     MarketRegimeDivergence,
     MomentumDisagreement,
+    NewsReactionDivergence,
+    OptionsAnomaly,
     PriceVolumeDivergence,
+    SentimentCrowdingAnomaly,
     StockSectorDivergence,
     VolatilityAnomaly,
 )
 from mapi.components.base import AnomalyComponent, ComponentContext, finalize_component_frame
 from mapi.config import MapiConfig
+from mapi.data.frequency import FrequencyValidation, validate_horizon_frequency
 from mapi.data.validation import normalize_ohlcv, ohlcv_quality_score
 from mapi.explainability import build_summary, dominant_anomalies, machine_reasons
 from mapi.models import ComponentSignal, HorizonConfig, MapiSignal, clamp
-from mapi.normalization import rolling_percentile_rank
+from mapi.normalization import prior_percentile_rank, rolling_percentile_rank
 from mapi.redundancy import compute_redundancy_penalties
+from mapi.realization import directional_realization_score
 from mapi.regimes import detect_market_regime
 from mapi.weights import WeightInputs, calculate_dynamic_weight
 
@@ -29,6 +35,10 @@ def default_components() -> list[AnomalyComponent]:
         MomentumDisagreement(),
         VolatilityAnomaly(),
         MarketRegimeDivergence(),
+        SentimentCrowdingAnomaly(),
+        OptionsAnomaly(),
+        FundamentalExpectationsDivergence(),
+        NewsReactionDivergence(),
     ]
 
 
@@ -55,14 +65,18 @@ def calculate_mapi(
     selected = {
         component.name: component for component in (components or default_components())
     }
+    config.validate(set(selected))
     outputs: dict[str, pd.DataFrame] = {}
     for horizon_name, horizon in config.horizons.items():
-        regime = detect_market_regime(prices, benchmark, horizon, config)
+        frequency = validate_horizon_frequency(prices.index, horizon)
+        if not frequency.compatible and config.frequency_mismatch_policy == "error":
+            raise ValueError(frequency.warning or "Input frequency is incompatible")
+        regime_info = detect_market_regime(prices, benchmark, horizon, config)
         context = ComponentContext(
             symbol=symbol,
             sector_frame=sector,
             benchmark_frame=benchmark,
-            regime=regime,
+            regime=regime_info["regime"],
         )
         component_frames: dict[str, pd.DataFrame] = {}
         for component_name in config.enabled_components:
@@ -79,7 +93,8 @@ def calculate_mapi(
             symbol=symbol,
             prices=prices,
             horizon=horizon,
-            regime=regime,
+            regime_info=regime_info,
+            frequency=frequency,
             component_frames=component_frames,
             components=selected,
             config=config,
@@ -112,7 +127,8 @@ def _score_horizon(
     symbol: str,
     prices: pd.DataFrame,
     horizon: HorizonConfig,
-    regime: pd.Series,
+    regime_info: pd.DataFrame,
+    frequency: FrequencyValidation,
     component_frames: dict[str, pd.DataFrame],
     components: dict[str, AnomalyComponent],
     config: MapiConfig,
@@ -137,14 +153,18 @@ def _score_horizon(
         horizon.rolling_window,
         horizon.min_periods,
     ).fillna(0.5)
-    trailing_return = prices["close"].pct_change(horizon.return_window).abs()
-    realized_score = rolling_percentile_rank(
-        trailing_return, horizon.rolling_window, horizon.min_periods
+    trailing_return = prices["close"].pct_change(horizon.return_window)
+    recent_move_extremeness = prior_percentile_rank(
+        trailing_return.abs(), horizon.rolling_window, horizon.min_periods
     ).fillna(0.0)
+    realization_scale = trailing_return.abs().rolling(
+        horizon.rolling_window, min_periods=horizon.min_periods
+    ).quantile(0.90).shift(1)
 
     records: list[dict[str, object]] = []
     anomaly_age = 0
     first_detected_at: object | None = None
+    first_detected_price: float | None = None
     previous_score = 0.0
     previous_state = "normal"
     component_base_sum = sum(
@@ -152,7 +172,11 @@ def _score_horizon(
     ) or 1.0
 
     for idx, timestamp in enumerate(prices.index):
-        current_regime = str(regime.iloc[idx])
+        current_regime = str(regime_info["regime"].iloc[idx])
+        current_regime_source = str(regime_info["regime_source"].iloc[idx])
+        current_regime_confidence = clamp(
+            float(regime_info["regime_confidence"].iloc[idx]), 0.0, 1.0
+        )
         component_signals: list[ComponentSignal] = []
         effective_sum = 0.0
         capacity_sum = 0.0
@@ -190,6 +214,10 @@ def _score_horizon(
                 confidence=confidence,
                 weight=weight_decision.weight,
                 novelty=clamp(float(row["novelty"]), 0.0, 1.0),
+                historical_extremeness=clamp(
+                    float(row.get("historical_extremeness", row["novelty"])), 0.0, 1.0
+                ),
+                recurrence_rate=clamp(float(row.get("recurrence_rate", 0.0)), 0.0, 1.0),
                 redundancy_penalty=penalty,
                 reason=str(row["reason"]),
                 metrics=row["metrics"] if isinstance(row["metrics"], dict) else {},
@@ -207,17 +235,6 @@ def _score_horizon(
             evidence_weight_sum += base_weight * confidence * penalty
 
         raw_score = 100.0 * effective_sum / capacity_sum if capacity_sum > 0 else 0.0
-        already_realized = clamp(float(realized_score.iloc[idx]), 0.0, 1.0)
-        actionability_score = clamp(
-            raw_score * (1.0 - config.already_realized_penalty * already_realized),
-            0.0,
-            100.0,
-        )
-        public_score = (
-            actionability_score
-            if config.score_semantics == "legacy_actionability"
-            else clamp(raw_score, 0.0, 100.0)
-        )
         direction = (
             direction_numerator / direction_denominator if direction_denominator > 0 else 0.0
         )
@@ -228,9 +245,17 @@ def _score_horizon(
         )
         evidence_coverage = clamp(evidence_weight_sum / component_base_sum, 0.0, 1.0)
         current_ohlcv_quality = float(ohlcv_quality.iloc[idx])
-        data_quality = clamp(current_ohlcv_quality * evidence_coverage, 0.0, 1.0)
+        frequency_factor = 1.0 if frequency.compatible else 0.0
+        data_quality = clamp(
+            current_ohlcv_quality * evidence_coverage * frequency_factor,
+            0.0,
+            1.0,
+        )
         confidence = clamp(
-            conditional_confidence * current_ohlcv_quality * evidence_coverage,
+            conditional_confidence
+            * current_ohlcv_quality
+            * evidence_coverage
+            * frequency_factor,
             0.0,
             1.0,
         )
@@ -246,6 +271,8 @@ def _score_horizon(
             else:
                 anomaly_age = 1
                 first_detected_at = timestamp
+                current_close = float(prices["close"].iloc[idx])
+                first_detected_price = current_close if current_close > 0.0 else None
             state = (
                 "confirmed"
                 if anomaly_age >= 3
@@ -264,10 +291,42 @@ def _score_horizon(
         else:
             anomaly_age = 0
             first_detected_at = None
+            first_detected_price = None
             state = "normal"
         score_change = raw_score - previous_score
         anomaly_trend = (
             "increasing" if score_change > 2.0 else "decreasing" if score_change < -2.0 else "stable"
+        )
+        recent_extremeness = clamp(
+            float(recent_move_extremeness.iloc[idx]), 0.0, 1.0
+        )
+        directional_move_since_detection = 0.0
+        if first_detected_price is not None and first_detected_price > 0.0:
+            current_close = float(prices["close"].iloc[idx])
+            if current_close > 0.0:
+                directional_move_since_detection = (
+                    current_close / first_detected_price - 1.0
+                )
+        scale = float(realization_scale.iloc[idx])
+        directional_realization = directional_realization_score(
+            direction,
+            directional_move_since_detection,
+            scale if pd.notna(scale) else 0.0,
+        )
+        actionability_score = clamp(
+            raw_score
+            * (
+                1.0
+                - config.directional_realization_penalty
+                * directional_realization
+            ),
+            0.0,
+            100.0,
+        )
+        public_score = (
+            actionability_score
+            if config.score_semantics == "legacy_actionability"
+            else clamp(raw_score, 0.0, 100.0)
         )
 
         reasons = dominant_anomalies(component_signals)
@@ -289,6 +348,8 @@ def _score_horizon(
             mapi_direction=direction,
             mapi_confidence=confidence,
             mapi_regime=current_regime,
+            regime_source=current_regime_source,
+            regime_confidence=current_regime_confidence,
             anomaly_components=component_signals,
             dominant_anomalies=reasons,
             data_quality_score=data_quality,
@@ -300,7 +361,13 @@ def _score_horizon(
             anomaly_age_bars=anomaly_age,
             anomaly_trend=anomaly_trend,
             confirmation_count=confirmation_count,
-            already_realized_score=already_realized,
+            recent_move_extremeness=recent_extremeness,
+            directional_move_since_detection=directional_move_since_detection,
+            directional_realization_score=directional_realization,
+            already_realized_score=recent_extremeness,
+            input_interval_seconds=frequency.median_interval_seconds,
+            horizon_frequency_compatible=frequency.compatible,
+            horizon_warning=frequency.warning,
             machine_reasons=machine_reasons(component_signals),
             human_summary=summary,
         )
@@ -315,6 +382,8 @@ def _score_horizon(
                 "mapi_direction": direction,
                 "mapi_confidence": confidence,
                 "mapi_regime": current_regime,
+                "regime_source": current_regime_source,
+                "regime_confidence": current_regime_confidence,
                 "dominant_anomalies": reasons,
                 "data_quality_score": data_quality,
                 "ohlcv_quality_score": current_ohlcv_quality,
@@ -325,7 +394,13 @@ def _score_horizon(
                 "anomaly_age_bars": anomaly_age,
                 "anomaly_trend": anomaly_trend,
                 "confirmation_count": confirmation_count,
-                "already_realized_score": already_realized,
+                "recent_move_extremeness": recent_extremeness,
+                "directional_move_since_detection": directional_move_since_detection,
+                "directional_realization_score": directional_realization,
+                "already_realized_score": recent_extremeness,
+                "input_interval_seconds": frequency.median_interval_seconds,
+                "horizon_frequency_compatible": frequency.compatible,
+                "horizon_warning": frequency.warning,
                 "human_summary": summary,
                 "signal": signal,
             }
@@ -335,6 +410,7 @@ def _score_horizon(
         if state == "invalidated":
             anomaly_age = 0
             first_detected_at = None
+            first_detected_price = None
     return pd.DataFrame(records, index=prices.index)
 
 

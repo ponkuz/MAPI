@@ -6,7 +6,7 @@ import pandas as pd
 from mapi.components.base import ComponentContext, finalize_component_frame
 from mapi.config import MapiConfig
 from mapi.models import HorizonConfig
-from mapi.normalization import historical_zscore, rolling_percentile_rank, signed_unit_from_z
+from mapi.normalization import event_novelty, historical_zscore, signed_unit_from_z
 
 
 class MomentumDisagreement:
@@ -55,9 +55,9 @@ class MomentumDisagreement:
             horizon.rolling_window
         )
         confidence = coverage.clip(0.0, 1.0) * 0.85
-        novelty = rolling_percentile_rank(
+        novelty = event_novelty(
             strength, horizon.rolling_window, horizon.min_periods
-        ).fillna(strength)
+        )
         labels = np.select(
             [
                 new_high_nonconfirm > 0.0,
@@ -91,11 +91,12 @@ class MomentumDisagreement:
                 "anomaly_strength": strength,
                 "direction": direction,
                 "confidence": confidence,
-                "novelty": novelty,
+                "novelty": novelty["novelty"].fillna(0.0),
+                "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),
+                "recurrence_rate": novelty["recurrence_rate"].fillna(0.0),
                 "reason": labels,
                 "metrics": metrics,
             },
             index=price_frame.index,
         )
         return finalize_component_frame(frame, price_frame.index, "Momentum disagreement")
-

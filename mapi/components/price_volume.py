@@ -9,7 +9,7 @@ from mapi.models import HorizonConfig
 from mapi.normalization import (
     close_location_value,
     historical_zscore,
-    rolling_percentile_rank,
+    event_novelty,
     robust_unit_score_from_z,
     signed_unit_from_z,
 )
@@ -73,9 +73,9 @@ class PriceVolumeDivergence:
             horizon.rolling_window, min_periods=1
         ).count() / float(horizon.rolling_window)
         confidence = coverage.clip(0.0, 1.0) * 0.95
-        novelty = rolling_percentile_rank(
+        novelty = event_novelty(
             strength, horizon.rolling_window, horizon.min_periods
-        ).fillna(strength.clip(0.0, 1.0))
+        )
 
         labels = np.select(
             [
@@ -108,7 +108,9 @@ class PriceVolumeDivergence:
                 "anomaly_strength": strength.clip(0.0, 1.0),
                 "direction": direction,
                 "confidence": confidence,
-                "novelty": novelty.clip(0.0, 1.0),
+                "novelty": novelty["novelty"].fillna(0.0),
+                "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),
+                "recurrence_rate": novelty["recurrence_rate"].fillna(0.0),
                 "reason": labels,
                 "metrics": metrics,
             },

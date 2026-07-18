@@ -82,8 +82,8 @@ class BacktestTests(unittest.TestCase):
         )
         labels = forward_path_metrics(prices, horizon_bars=2, signal_delay_bars=1)
         self.assertAlmostEqual(float(labels.iloc[0]["forward_return"]), -0.01)
-        self.assertAlmostEqual(float(labels.iloc[0]["mfe"]), 0.10)
-        self.assertAlmostEqual(float(labels.iloc[0]["mae"]), -0.01)
+        self.assertAlmostEqual(float(labels.iloc[0]["intrabar_mfe"]), 121.1 / 110.0 - 1.0)
+        self.assertAlmostEqual(float(labels.iloc[0]["intrabar_mae"]), 108.8 / 110.0 - 1.0)
 
         long_signals = pd.DataFrame(
             {"mapi_score": [100.0] + [0.0] * 6, "mapi_direction": [1.0] + [0.0] * 6},
@@ -108,11 +108,55 @@ class BacktestTests(unittest.TestCase):
             slippage_bps=0.0,
         )
         self.assertAlmostEqual(long_metrics.mean_return, -0.01)
-        self.assertAlmostEqual(long_metrics.mean_mfe, 0.10)
-        self.assertAlmostEqual(long_metrics.mean_mae, -0.01)
+        self.assertAlmostEqual(long_metrics.mean_intrabar_mfe, 121.1 / 110.0 - 1.0)
+        self.assertAlmostEqual(long_metrics.mean_intrabar_mae, 108.8 / 110.0 - 1.0)
         self.assertAlmostEqual(short_metrics.mean_return, 0.01)
-        self.assertAlmostEqual(short_metrics.mean_mfe, 0.01)
-        self.assertAlmostEqual(short_metrics.mean_mae, -0.10)
+        self.assertAlmostEqual(short_metrics.mean_intrabar_mfe, -(108.8 / 110.0 - 1.0))
+        self.assertAlmostEqual(short_metrics.mean_intrabar_mae, -(121.1 / 110.0 - 1.0))
+
+    def test_event_statistics_are_unannualized_and_bootstrapped(self) -> None:
+        signals = pd.DataFrame(
+            {"mapi_score": 100.0, "mapi_direction": 1.0}, index=self.prices.index
+        )
+        metrics = run_event_study(
+            signals,
+            self.prices,
+            horizon_bars=3,
+            transaction_cost_bps=0.0,
+            spread_bps=0.0,
+            slippage_bps=0.0,
+            bootstrap_samples=200,
+        )
+        self.assertEqual(metrics.bootstrap_samples, 200)
+        self.assertLessEqual(metrics.mean_return_ci_lower, metrics.mean_return)
+        self.assertGreaterEqual(metrics.mean_return_ci_upper, metrics.mean_return)
+        self.assertAlmostEqual(metrics.sharpe_ratio, metrics.event_return_mean_to_std)
+        payload = metrics.to_dict()
+        self.assertIn("gross_directional_accuracy", payload)
+        self.assertIn("large_move_capture_rate", payload)
+        self.assertTrue(any("compatibility aliases" in item for item in payload["warnings"]))
+
+    def test_intrabar_breakout_uses_high_low_not_close(self) -> None:
+        timestamps = pd.date_range("2025-02-03", periods=10, freq="B", tz="UTC")
+        close = pd.Series([100.0] * 10)
+        high = pd.Series([101.0] * 10)
+        low = pd.Series([99.0] * 10)
+        high.iloc[7] = 102.0
+        prices = normalize_ohlcv(
+            pd.DataFrame(
+                {
+                    "timestamp": timestamps,
+                    "open": close,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "volume": 1000.0,
+                }
+            )
+        )
+        labels = forward_path_metrics(prices, horizon_bars=2, signal_delay_bars=1)
+        self.assertEqual(float(labels.iloc[5]["forward_return"]), 0.0)
+        self.assertEqual(float(labels.iloc[5]["intrabar_breakout"]), 1.0)
 
     def test_round_trip_cost_is_charged_once(self) -> None:
         signals = pd.DataFrame(

@@ -11,7 +11,7 @@ from mapi.components.base import (
 from mapi.config import MapiConfig
 from mapi.data.alignment import align_point_in_time
 from mapi.models import HorizonConfig
-from mapi.normalization import historical_zscore, rolling_percentile_rank, signed_unit_from_z
+from mapi.normalization import event_novelty, historical_zscore, signed_unit_from_z
 
 
 class MarketRegimeDivergence:
@@ -62,9 +62,9 @@ class MarketRegimeDivergence:
             * (spread_z.notna() | benchmark_z.notna()).astype(float)
             * 0.85
         )
-        novelty = rolling_percentile_rank(
+        novelty = event_novelty(
             strength, horizon.rolling_window, horizon.min_periods
-        ).fillna(strength)
+        )
         labels = pd.Series(
             np.select(
                 [
@@ -109,7 +109,9 @@ class MarketRegimeDivergence:
                 "anomaly_strength": strength,
                 "direction": direction,
                 "confidence": confidence,
-                "novelty": novelty,
+                "novelty": novelty["novelty"].fillna(0.0),
+                "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),
+                "recurrence_rate": novelty["recurrence_rate"].fillna(0.0),
                 "reason": labels,
                 "metrics": metrics,
             },

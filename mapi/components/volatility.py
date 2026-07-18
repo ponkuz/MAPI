@@ -8,6 +8,7 @@ from mapi.config import MapiConfig
 from mapi.models import HorizonConfig
 from mapi.normalization import (
     historical_zscore,
+    event_novelty,
     rolling_percentile_rank,
     signed_unit_from_z,
     true_range,
@@ -70,9 +71,9 @@ class VolatilityAnomaly:
             .mean()
             * 0.9
         )
-        novelty = rolling_percentile_rank(
+        novelty = event_novelty(
             strength, horizon.rolling_window, horizon.min_periods
-        ).fillna(strength)
+        )
         labels = np.select(
             [
                 compression_with_volume > 0.35,
@@ -102,11 +103,12 @@ class VolatilityAnomaly:
                 "anomaly_strength": strength,
                 "direction": direction.clip(-1.0, 1.0),
                 "confidence": confidence,
-                "novelty": novelty,
+                "novelty": novelty["novelty"].fillna(0.0),
+                "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),
+                "recurrence_rate": novelty["recurrence_rate"].fillna(0.0),
                 "reason": labels,
                 "metrics": metrics,
             },
             index=price_frame.index,
         )
         return finalize_component_frame(frame, price_frame.index, "Volatility anomaly")
-

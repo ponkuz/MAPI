@@ -27,7 +27,7 @@ MAPI is experimental. This report tests a research hypothesis and does not claim
 
 ## Event-study results
 
-Include sample count, return distribution, hit rate, Sharpe, Sortino, maximum drawdown, profit factor, precision, recall, information coefficient, MFE, and MAE. Show results by year, regime, symbol, sector, score bucket, and direction.
+Include sample count, return distribution, unannualized event-return ratios, bootstrap confidence intervals, gross directional accuracy, net profitable event rate, large-move capture rate, information coefficient, intrabar MFE/MAE, and intrabar breakout rate. Report each baseline's fitted threshold, fit/test candidate frequency, selected event count, and excluded overlap count. Keep the full-period buy-and-hold benchmark separate from event studies. Show results by year, regime, symbol, sector, score bucket, and direction.
 
 Treat Sharpe, drawdown, and profit factor as descriptive event-sequence statistics. Do not present them as portfolio performance until capital, sizing, exposure, overlapping positions, borrow, and capacity are modeled.
 
