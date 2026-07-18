@@ -53,7 +53,7 @@ def dominant_alert_anomalies(
 
 
 def dominant_anomalies(components: list[ComponentSignal], limit: int = 3) -> list[str]:
-    """Compatibility alias for intensity-ranked explanations in v0.3.3."""
+    """Compatibility alias for intensity-ranked explanations in v0.3.4."""
 
     return dominant_intensity_anomalies(components, limit)
 

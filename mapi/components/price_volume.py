@@ -3,7 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from mapi.components.base import ComponentContext, finalize_component_frame
+from mapi.components.base import (
+    DIRECTION_EPSILON,
+    ComponentContext,
+    finalize_component_frame,
+)
 from mapi.config import MapiConfig
 from mapi.models import HorizonConfig
 from mapi.normalization import (
@@ -185,18 +189,22 @@ def _price_volume_direction_contract(
     )
     forecast_direction = forecast_direction.clip(-1.0, 1.0)
 
+    has_forecast = forecast_direction.abs() > DIRECTION_EPSILON
     directional_evidence_strength = (
-        breakout | low_volume_move | flow_mismatch
+        (breakout | low_volume_move | flow_mismatch) & has_forecast
     ).astype(float)
     direction_semantics = pd.Series(
         np.select(
             [
-                breakout,
+                breakout & has_forecast,
                 flat_price,
-                low_volume_move & (price_z < 0.0),
-                low_volume_move & (price_z >= 0.0),
-                flow_mismatch & (flow_z > 0.0),
-                flow_mismatch & (flow_z <= 0.0),
+                low_volume_move & has_forecast & (price_z < 0.0),
+                low_volume_move & has_forecast & (price_z >= 0.0),
+                flow_mismatch & has_forecast & (flow_z > 0.0),
+                flow_mismatch & has_forecast & (flow_z <= 0.0),
+                breakout,
+                low_volume_move,
+                flow_mismatch,
             ],
             [
                 "reversal_hypothesis_bearish_weak_volume_breakout",
@@ -205,6 +213,9 @@ def _price_volume_direction_contract(
                 "reversal_hypothesis_bearish_large_up_move_low_volume",
                 "reversal_hypothesis_bullish_directional_flow_against_price",
                 "reversal_hypothesis_bearish_directional_flow_against_price",
+                "direction_neutral_weak_volume_breakout_without_forecast",
+                "direction_neutral_large_move_low_volume_without_forecast",
+                "direction_neutral_flow_mismatch_without_forecast",
             ],
             default="direction_neutral_price_volume_baseline",
         ),

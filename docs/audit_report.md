@@ -1,4 +1,4 @@
-# MAPI v0.2 to v0.3.3 targeted source audit
+# MAPI v0.2 to v0.3.4 targeted source audit
 
 This source audit does not establish profitability. No parameter was tuned against the final test set. Each item below records the confirmed finding, changed files, regression coverage, behavioral change, compatibility effect, and remaining methodological uncertainty.
 
@@ -249,7 +249,7 @@ This source audit does not establish profitability. No parameter was tuned again
 
 - **Confirmed:** regime weighting, forecast mappings, explanation fields, and event metadata materially changed behavior and serialization after r2.
 - **Files/lines:** `mapi/version.py:3-5`; `pyproject.toml:3`; `configs/mapi_v0_3.yaml:1`; `mapi/models.py:129-133,263-271`; `tests/test_edge_cases.py:58-91`; `tests/test_scoring.py:17-35`.
-- **Regression tests:** the historical r3 schema check is superseded by `test_json_output_contains_v033_schema`; `test_scores_are_bounded_and_serializable`; `test_legacy_public_score_selector_does_not_relabel_algorithm`.
+- **Regression tests:** the historical r3 schema check is superseded by `test_json_output_contains_v034_schema`; `test_scores_are_bounded_and_serializable`; `test_legacy_public_score_selector_does_not_relabel_algorithm`.
 - **Before/after:** package implementation is `0.3.1`, algorithm revision is `mapi_v0.3_source_audit_r3`, and data contract is `mapi_signal_v0.3.1`; config fingerprint remains distinct.
 - **Compatibility:** consumers validating exact versions or schemas must accept the new identifiers and fields. Legacy YAML `signal_version` input still cannot relabel actual output.
 - **Uncertainty:** r3 implementation commit `1433fe1d7c811a0cf6e0be8a22a6e7395e2626e5` completed the green Python 3.12/3.13 matrix in GitHub Actions run `29638531915`; future dependency and platform changes remain outside that evidence.
@@ -303,7 +303,7 @@ This source audit does not establish profitability. No parameter was tuned again
 
 - **Confirmed:** subtype semantics, serialized directional capacity, and aggregate forecast-direction behavior materially change r3 behavior and the v0.3.1 data contract.
 - **Files/lines:** `mapi/version.py:3-5`; `pyproject.toml:3`; `configs/mapi_v0_3.yaml:1`; `mapi/models.py:39-100`; `mapi/scoring.py:197-286,406-477`; `tests/test_scoring.py:58-76,176-205`.
-- **Regression tests:** the r4 schema check is superseded by `test_json_output_contains_v033_schema`, plus the component and aggregate direction tests in sections 29-32.
+- **Regression tests:** the r4 schema check is superseded by `test_json_output_contains_v034_schema`, plus the component and aggregate direction tests in sections 29-32.
 - **Before/after:** implementation is `0.3.2`, algorithm revision is `mapi_v0.3_source_audit_r4`, and data contract is `mapi_signal_v0.3.2`.
 - **Compatibility:** exact-version and schema consumers must accept the new identifiers and `directional_evidence_strength`; `mapi_direction_semantics` now names the no-view-excluding aggregate formula.
 - **Verification:** local Python 3.13 completed `unittest` 91/91, `pytest` 91 plus 40 subtests, CLI end-to-end 1/1, and configuration validation 7/7. Implementation commit `081f68a856f6c6ce17cdad01aa00e0122e1420a0` completed the green Python 3.12/3.13 matrix, including `unittest`, `pytest`, both CLI paths, and configuration validation, in GitHub Actions run `29644871013`.
@@ -318,6 +318,15 @@ This source audit does not establish profitability. No parameter was tuned again
 - **Compatibility:** inconsistent external component plugins now raise `ValueError` instead of silently diluting aggregate direction. Legacy plugins that omit capacity derive it with the same epsilon. Output identity is implementation `0.3.3`, algorithm `mapi_v0.3_source_audit_r5`, and data contract `mapi_signal_v0.3.3`. Aggregate direction semantics now explicitly say `novelty_adjusted` because the formula weights component direction by recurrence-adjusted alert contribution.
 - **Remaining methodological uncertainty:** the epsilon is a numerical contract boundary, not a fitted market threshold. Alert-weighted direction can still suppress persistent recurrent directional intensity by design. Separate intensity direction, directional trade actionability, and multi-subtype price-volume output remain non-blocking future research choices.
 - **Verification:** local Python 3.13 completed `unittest` 95/95, `pytest` 95 plus 42 subtests, CLI end-to-end 1/1, and configuration validation 7/7. Implementation commit `b3c2158c22b1723cd77d6667294a1baa0e2d3905` completed the green Python 3.12/3.13 matrix, including `unittest`, `pytest`, both CLI paths, and configuration validation, in GitHub Actions run `29645771575`.
+
+## 36. Price-volume sub-epsilon direction capacity
+
+- **Confirmed:** a numerically tiny price-volume forecast could retain binary directional capacity and violate the component direction contract on real UBER history.
+- **Files:** `mapi/components/price_volume.py`; `mapi/components/base.py`; `tests/test_components.py`; `mapi/version.py`.
+- **Regression test:** `test_near_zero_price_volume_forecast_has_no_directional_capacity`.
+- **Before/after:** price-volume subtypes now expose directional capacity only when their computed forecast magnitude exceeds the shared `1e-12` epsilon. A directional subtype with a sub-epsilon forecast receives an explicit no-view semantic instead of raising during finalization.
+- **Compatibility:** the edge-case semantic and serialized direction capacity change, so implementation is `0.3.4`, algorithm revision is `mapi_v0.3_source_audit_r6`, and data contract is `mapi_signal_v0.3.4`.
+- **Remaining methodological uncertainty:** the epsilon remains a numerical consistency boundary, not a fitted market threshold, and price-volume reversal hypotheses remain heuristic.
 
 ## Remaining system-level limits
 

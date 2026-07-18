@@ -172,6 +172,26 @@ class ComponentTests(unittest.TestCase):
             "direction_neutral_momentum_disagreement_without_forecast",
         )
 
+    def test_near_zero_price_volume_forecast_has_no_directional_capacity(self) -> None:
+        index = pd.RangeIndex(1)
+        zero = pd.Series(0.0, index=index)
+        direction, capacity, semantics, subtype = _price_volume_direction_contract(
+            breakout_on_weak_volume=zero,
+            high_volume_flat_price=zero,
+            large_move_low_volume=pd.Series(0.7, index=index),
+            directional_flow_mismatch=zero,
+            price_z=pd.Series(DIRECTION_EPSILON / 10.0, index=index),
+            flow_z=zero,
+        )
+
+        self.assertEqual(subtype.iloc[0], "large_move_low_volume")
+        self.assertLessEqual(abs(float(direction.iloc[0])), DIRECTION_EPSILON)
+        self.assertEqual(float(capacity.iloc[0]), 0.0)
+        self.assertEqual(
+            semantics.iloc[0],
+            "direction_neutral_large_move_low_volume_without_forecast",
+        )
+
     def test_high_volume_decline_is_directionally_confirmed_flow(self) -> None:
         raw = make_ohlcv(90, seed=77)
         previous_close = float(raw.loc[len(raw) - 2, "close"])
@@ -214,6 +234,9 @@ class ComponentTests(unittest.TestCase):
                 "reversal_hypothesis_bearish_large_up_move_low_volume",
                 "reversal_hypothesis_bullish_directional_flow_against_price",
                 "reversal_hypothesis_bearish_directional_flow_against_price",
+                "direction_neutral_weak_volume_breakout_without_forecast",
+                "direction_neutral_large_move_low_volume_without_forecast",
+                "direction_neutral_flow_mismatch_without_forecast",
                 "direction_neutral_price_volume_baseline",
             },
             "stock_sector_divergence": {
