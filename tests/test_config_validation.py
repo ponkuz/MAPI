@@ -90,6 +90,47 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(decision.factors["reliability"], 0.0)
         self.assertEqual(decision.weight, 0.0)
 
+    def test_regime_multiplier_scales_with_regime_confidence(self) -> None:
+        neutral = calculate_dynamic_weight(
+            "volatility_anomaly",
+            0.5,
+            WeightInputs(
+                regime="panic",
+                regime_confidence=0.0,
+                freshness=1.0,
+                reliability=1.0,
+                liquidity=1.0,
+                persistence=0.5,
+            ),
+        )
+        certain = calculate_dynamic_weight(
+            "volatility_anomaly",
+            0.5,
+            WeightInputs(
+                regime="panic",
+                regime_confidence=1.0,
+                freshness=1.0,
+                reliability=1.0,
+                liquidity=1.0,
+                persistence=0.5,
+            ),
+        )
+        self.assertEqual(neutral.factors["regime"], 1.0)
+        self.assertEqual(certain.factors["regime"], 1.25)
+        self.assertGreater(certain.weight, neutral.weight)
+
+    def test_research_eligibility_configuration_is_validated(self) -> None:
+        for field, value in (
+            ("research_fit_fraction", 1.0),
+            ("research_min_confidence", -0.1),
+            ("research_min_data_quality", 1.1),
+        ):
+            with self.subTest(field=field):
+                config = MapiConfig()
+                setattr(config, field, value)
+                with self.assertRaises(ValueError):
+                    config.validate()
+
 
 if __name__ == "__main__":
     unittest.main()

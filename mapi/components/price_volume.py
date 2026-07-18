@@ -51,24 +51,30 @@ class PriceVolumeDivergence:
             (price_z.abs() / 3.0).clip(0.0, 1.0)
             * ((-volume_z).clip(lower=0.0) / 2.0).clip(0.0, 1.0)
         )
-        sign_mismatch = (
-            (np.sign(price_z.fillna(0.0)) != np.sign(volume_z.fillna(0.0)))
+        close_location = close_location_value(price_frame)
+        directional_flow = close_location * np.log1p(relative_volume.clip(lower=0.0))
+        flow_z = historical_zscore(
+            directional_flow, horizon.rolling_window, horizon.min_periods
+        )
+        directional_flow_mismatch = (
+            (np.sign(price_z.fillna(0.0)) != np.sign(flow_z.fillna(0.0)))
             & (price_z.abs() > 0.8)
-            & (volume_z.abs() > 0.8)
-        ).astype(float) * ((price_z.abs() + volume_z.abs()) / 6.0).clip(0.0, 1.0)
+            & (flow_z.abs() > 0.8)
+        ).astype(float) * ((price_z.abs() + flow_z.abs()) / 6.0).clip(0.0, 1.0)
         strength = pd.concat(
             [
                 breakout_on_weak_volume,
                 high_volume_flat_price,
                 large_move_low_volume,
-                sign_mismatch,
+                directional_flow_mismatch,
             ],
             axis=1,
         ).max(axis=1)
-        close_location = close_location_value(price_frame)
-        direction = (
-            signed_unit_from_z(price_z, scale=2.0) * 0.75 + close_location * 0.5
+        observed_pressure = (
+            signed_unit_from_z(price_z, scale=2.0) * 0.6
+            + signed_unit_from_z(flow_z, scale=2.0) * 0.4
         ).clip(-1.0, 1.0)
+        forecast_direction = observed_pressure
         coverage = volume.where(volume > 0.0).rolling(
             horizon.rolling_window, min_periods=1
         ).count() / float(horizon.rolling_window)
@@ -82,13 +88,13 @@ class PriceVolumeDivergence:
                 breakout_on_weak_volume > 0.0,
                 high_volume_flat_price > 0.45,
                 large_move_low_volume > 0.35,
-                sign_mismatch > 0.0,
+                directional_flow_mismatch > 0.0,
             ],
             [
                 "Price broke a prior high while volume was weaker than its recent baseline",
                 "Volume expanded unusually while price movement remained muted",
                 "A large price move appeared on unusually light volume",
-                "Price and volume moved in statistically unusual opposite directions",
+                "Price movement and directional volume flow disagreed",
             ],
             default="Price and volume behavior is close to its recent baseline",
         )
@@ -100,13 +106,22 @@ class PriceVolumeDivergence:
                 "relative_volume": float(relative_volume.iloc[i])
                 if pd.notna(relative_volume.iloc[i])
                 else None,
+                "directional_flow_z": float(flow_z.iloc[i])
+                if pd.notna(flow_z.iloc[i])
+                else None,
+                "directional_flow_mismatch": float(
+                    directional_flow_mismatch.iloc[i]
+                ),
             }
             for i in range(len(price_frame))
         ]
         frame = pd.DataFrame(
             {
                 "anomaly_strength": strength.clip(0.0, 1.0),
-                "direction": direction,
+                "direction": forecast_direction,
+                "forecast_direction": forecast_direction,
+                "observed_pressure": observed_pressure,
+                "direction_semantics": "continuation_hypothesis_from_directional_flow",
                 "confidence": confidence,
                 "novelty": novelty["novelty"].fillna(0.0),
                 "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),

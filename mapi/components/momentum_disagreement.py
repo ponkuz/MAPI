@@ -31,26 +31,44 @@ class MomentumDisagreement:
         medium_signal = signed_unit_from_z(medium_z, scale=2.0)
         timescale_disagreement = ((short_signal - medium_signal).abs() / 2.0).clip(0.0, 1.0)
 
-        previous_high = close.shift(1).rolling(
-            horizon.rolling_window, min_periods=horizon.min_periods
-        ).max()
-        previous_low = close.shift(1).rolling(
-            horizon.rolling_window, min_periods=horizon.min_periods
-        ).min()
         momentum = close.diff(short_window)
-        prior_momentum_high = momentum.shift(1).rolling(
-            horizon.rolling_window, min_periods=horizon.min_periods
-        ).max()
-        prior_momentum_low = momentum.shift(1).rolling(
-            horizon.rolling_window, min_periods=horizon.min_periods
-        ).min()
-        new_high_nonconfirm = ((close > previous_high) & (momentum < prior_momentum_high)).astype(float)
-        new_low_nonconfirm = ((close < previous_low) & (momentum > prior_momentum_low)).astype(float)
+        previous_high, momentum_at_previous_high = _prior_extreme_momentum(
+            close,
+            momentum,
+            horizon.rolling_window,
+            horizon.min_periods,
+            "high",
+        )
+        previous_low, momentum_at_previous_low = _prior_extreme_momentum(
+            close,
+            momentum,
+            horizon.rolling_window,
+            horizon.min_periods,
+            "low",
+        )
+        new_high_nonconfirm = (
+            (close > previous_high) & (momentum < momentum_at_previous_high)
+        ).astype(float)
+        new_low_nonconfirm = (
+            (close < previous_low) & (momentum > momentum_at_previous_low)
+        ).astype(float)
         nonconfirmation = pd.concat(
             [new_high_nonconfirm * 0.75, new_low_nonconfirm * 0.75], axis=1
         ).max(axis=1)
         strength = pd.concat([timescale_disagreement, nonconfirmation], axis=1).max(axis=1)
-        direction = ((short_signal * 0.65) + (medium_signal * 0.35)).clip(-1.0, 1.0)
+        observed_pressure = (
+            (short_signal * 0.65) + (medium_signal * 0.35)
+        ).clip(-1.0, 1.0)
+        timescale_forecast = (short_signal * timescale_disagreement).clip(-1.0, 1.0)
+        forecast_direction = pd.Series(
+            np.select(
+                [new_high_nonconfirm > 0.0, new_low_nonconfirm > 0.0],
+                [-nonconfirmation, nonconfirmation],
+                default=timescale_forecast,
+            ),
+            index=price_frame.index,
+            dtype=float,
+        ).clip(-1.0, 1.0)
         coverage = close.rolling(horizon.rolling_window, min_periods=1).count() / float(
             horizon.rolling_window
         )
@@ -83,13 +101,26 @@ class MomentumDisagreement:
                 else None,
                 "short_z": float(short_z.iloc[i]) if pd.notna(short_z.iloc[i]) else None,
                 "medium_z": float(medium_z.iloc[i]) if pd.notna(medium_z.iloc[i]) else None,
+                "previous_extreme_price": float(previous_high.iloc[i])
+                if new_high_nonconfirm.iloc[i] > 0.0
+                else float(previous_low.iloc[i])
+                if new_low_nonconfirm.iloc[i] > 0.0
+                else None,
+                "momentum_at_previous_extreme": float(momentum_at_previous_high.iloc[i])
+                if new_high_nonconfirm.iloc[i] > 0.0
+                else float(momentum_at_previous_low.iloc[i])
+                if new_low_nonconfirm.iloc[i] > 0.0
+                else None,
             }
             for i in range(len(price_frame))
         ]
         frame = pd.DataFrame(
             {
                 "anomaly_strength": strength,
-                "direction": direction,
+                "direction": forecast_direction,
+                "forecast_direction": forecast_direction,
+                "observed_pressure": observed_pressure,
+                "direction_semantics": "hypothesized_forward_direction",
                 "confidence": confidence,
                 "novelty": novelty["novelty"].fillna(0.0),
                 "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),
@@ -100,3 +131,24 @@ class MomentumDisagreement:
             index=price_frame.index,
         )
         return finalize_component_frame(frame, price_frame.index, "Momentum disagreement")
+
+
+def _prior_extreme_momentum(
+    close: pd.Series,
+    momentum: pd.Series,
+    window: int,
+    min_periods: int,
+    extreme: str,
+) -> tuple[pd.Series, pd.Series]:
+    extreme_price = pd.Series(np.nan, index=close.index, dtype=float)
+    extreme_momentum = pd.Series(np.nan, index=close.index, dtype=float)
+    for position in range(len(close)):
+        history = close.iloc[max(0, position - window) : position].dropna()
+        if len(history) < min_periods:
+            continue
+        timestamp = history.idxmax() if extreme == "high" else history.idxmin()
+        extreme_price.iloc[position] = float(close.loc[timestamp])
+        value = momentum.loc[timestamp]
+        if pd.notna(value):
+            extreme_momentum.iloc[position] = float(value)
+    return extreme_price, extreme_momentum

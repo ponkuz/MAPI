@@ -14,6 +14,7 @@ class WeightInputs:
     reliability: float
     liquidity: float
     persistence: float
+    regime_confidence: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -47,8 +48,11 @@ def calculate_dynamic_weight(
     }:
         regime_multiplier = 1.10
 
+    regime_confidence = clamp(inputs.regime_confidence, 0.0, 1.0)
+    confidence_scaled_regime = 1.0 + (regime_multiplier - 1.0) * regime_confidence
     factors = {
-        "regime": regime_multiplier,
+        "regime": confidence_scaled_regime,
+        "regime_confidence": regime_confidence,
         "freshness": 0.75 + 0.25 * clamp(inputs.freshness, 0.0, 1.0),
         "reliability": clamp(inputs.reliability, 0.0, 1.0),
         "liquidity": 0.80 + 0.20 * clamp(inputs.liquidity, 0.0, 1.0),

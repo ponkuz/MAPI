@@ -6,6 +6,11 @@ import pandas as pd
 from mapi.data.validation import normalize_ohlcv
 from mapi.models import BacktestMetrics
 from mapi.research.labels import forward_path_metrics
+from mapi.research.matching import (
+    candidate_exclusions,
+    candidate_mask,
+    evidence_eligibility_mask,
+)
 
 
 def run_event_study(
@@ -25,6 +30,11 @@ def run_event_study(
     bootstrap_samples: int = 1000,
     bootstrap_seed: int = 42,
     evaluation_mask: pd.Series | None = None,
+    min_confidence: float = 0.0,
+    min_data_quality: float = 0.0,
+    require_frequency_compatible: bool = False,
+    direction_column: str = "mapi_direction",
+    selection_mask: pd.Series | None = None,
 ) -> BacktestMetrics:
     """Evaluate signal events; this is not a capital-aware portfolio simulation."""
 
@@ -33,18 +43,51 @@ def run_event_study(
     if score_column not in aligned.columns:
         raise ValueError(f"Score column is unavailable: {score_column}")
     score = aligned[score_column].fillna(0.0)
-    direction = aligned["mapi_direction"].fillna(0.0).clip(-1.0, 1.0)
+    if direction_column not in aligned.columns:
+        raise ValueError(f"Direction column is unavailable: {direction_column}")
+    direction = aligned[direction_column].fillna(0.0).clip(-1.0, 1.0)
     evaluation = (
         evaluation_mask.reindex(prices.index, fill_value=False).astype(bool)
         if evaluation_mask is not None
         else pd.Series(True, index=prices.index)
     )
+    exclusions = candidate_exclusions(
+        aligned,
+        score_column,
+        score_threshold,
+        min_direction,
+        evaluation,
+        min_confidence,
+        min_data_quality,
+        require_frequency_compatible,
+        direction_column,
+        selection_mask,
+    )
+    selected_candidates = (
+        selection_mask.reindex(prices.index, fill_value=False)
+        & evidence_eligibility_mask(
+            aligned,
+            evaluation,
+            min_confidence,
+            min_data_quality,
+            require_frequency_compatible,
+        )
+        & (direction.abs() >= min_direction)
+        if selection_mask is not None
+        else candidate_mask(
+            aligned,
+            score_column,
+            score_threshold,
+            min_direction,
+            evaluation,
+            min_confidence,
+            min_data_quality,
+            require_frequency_compatible,
+            direction_column,
+        )
+    )
     candidate_side = pd.Series(
-        np.where(
-        evaluation & (score >= score_threshold) & (direction.abs() >= min_direction),
-        np.sign(direction),
-        0.0,
-        ),
+        np.where(selected_candidates, np.sign(direction), 0.0),
         index=prices.index,
         dtype=float,
     )
@@ -90,7 +133,7 @@ def run_event_study(
             bootstrap_samples=bootstrap_samples,
             maximum_drawdown=0.0,
             profit_factor=0.0,
-            information_coefficient=0.0,
+            active_event_ic=0.0,
             mean_intrabar_mfe=0.0,
             mean_intrabar_mae=0.0,
             mean_absolute_return=0.0,
@@ -101,6 +144,10 @@ def run_event_study(
             non_overlapping=not allow_overlapping,
             overlapping_candidates_excluded=excluded_overlap,
             score_column_used=score_column,
+            direction_column_used=direction_column,
+            excluded_low_confidence_count=exclusions.low_confidence,
+            excluded_low_quality_count=exclusions.low_quality,
+            excluded_frequency_mismatch_count=exclusions.frequency_mismatch,
             warnings=warnings,
         )
 
@@ -146,7 +193,7 @@ def run_event_study(
         and float(ic_frame.iloc[:, 0].std(ddof=0)) > 0.0
         and float(ic_frame.iloc[:, 1].std(ddof=0)) > 0.0
     )
-    information_coefficient = (
+    active_event_ic = (
         float(ic_frame.iloc[:, 0].corr(ic_frame.iloc[:, 1]))
         if has_ic_variation
         else 0.0
@@ -184,7 +231,7 @@ def run_event_study(
         bootstrap_samples=bootstrap_samples,
         maximum_drawdown=max_drawdown,
         profit_factor=float(profit_factor),
-        information_coefficient=information_coefficient,
+        active_event_ic=active_event_ic,
         mean_intrabar_mfe=float(directional_mfe.mean()) if not directional_mfe.empty else 0.0,
         mean_intrabar_mae=float(directional_mae.mean()) if not directional_mae.empty else 0.0,
         mean_absolute_return=float(trade_labels["absolute_return"].mean()),
@@ -195,6 +242,10 @@ def run_event_study(
         non_overlapping=not allow_overlapping,
         overlapping_candidates_excluded=excluded_overlap,
         score_column_used=score_column,
+        direction_column_used=direction_column,
+        excluded_low_confidence_count=exclusions.low_confidence,
+        excluded_low_quality_count=exclusions.low_quality,
+        excluded_frequency_mismatch_count=exclusions.frequency_mismatch,
         warnings=warnings,
     )
 
@@ -216,6 +267,11 @@ def run_backtest(
     bootstrap_samples: int = 1000,
     bootstrap_seed: int = 42,
     evaluation_mask: pd.Series | None = None,
+    min_confidence: float = 0.0,
+    min_data_quality: float = 0.0,
+    require_frequency_compatible: bool = False,
+    direction_column: str = "mapi_direction",
+    selection_mask: pd.Series | None = None,
 ) -> BacktestMetrics:
     """Compatibility wrapper for the event-study engine."""
 
@@ -236,6 +292,11 @@ def run_backtest(
         bootstrap_samples=bootstrap_samples,
         bootstrap_seed=bootstrap_seed,
         evaluation_mask=evaluation_mask,
+        min_confidence=min_confidence,
+        min_data_quality=min_data_quality,
+        require_frequency_compatible=require_frequency_compatible,
+        direction_column=direction_column,
+        selection_mask=selection_mask,
     )
 
 
@@ -253,7 +314,9 @@ def compare_score_buckets(
         bucket_signals = signals.copy()
         in_bucket = (score >= left) & (score < right)
         bucket_signals.loc[~in_bucket, score_column] = 0.0
-        bucket_signals.loc[~in_bucket, "mapi_direction"] = 0.0
+        for direction_column in ("mapi_direction", "mapi_forecast_direction"):
+            if direction_column in bucket_signals:
+                bucket_signals.loc[~in_bucket, direction_column] = 0.0
         metrics = run_backtest(
             bucket_signals,
             price_frame,

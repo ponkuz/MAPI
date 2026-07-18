@@ -65,8 +65,8 @@ def forward_path_metrics(
         realized_value = float(path_return.iloc[-1])
         future_high = prices["high"].iloc[entry_idx + 1 : exit_idx + 1]
         future_low = prices["low"].iloc[entry_idx + 1 : exit_idx + 1]
-        intrabar_mfe.append(float((future_high / entry - 1.0).max()))
-        intrabar_mae.append(float((future_low / entry - 1.0).min()))
+        intrabar_mfe.append(max(0.0, float((future_high / entry - 1.0).max())))
+        intrabar_mae.append(min(0.0, float((future_low / entry - 1.0).min())))
         realized.append(realized_value)
         absolute_return.append(abs(realized_value))
         future_volatility.append(float(path.pct_change().dropna().std(ddof=0)))

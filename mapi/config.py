@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from hashlib import sha256
+import json
 from math import isfinite
 from pathlib import Path
 from typing import Any
 
 from mapi.models import HorizonConfig
+from mapi.version import ALGORITHM_REVISION
 
 
 DEFAULT_HORIZONS: dict[str, HorizonConfig] = {
@@ -52,9 +55,13 @@ DEFAULT_COMPONENT_RELIABILITY: dict[str, float] = {
 
 @dataclass
 class MapiConfig:
-    signal_version: str = "mapi_v0.2"
-    score_semantics: str = "pure_anomaly"
+    signal_version: str = ALGORITHM_REVISION
+    score_semantics: str = "intensity"
     research_score_column: str = "mapi_actionability_score"
+    research_fit_fraction: float = 0.70
+    research_min_confidence: float = 0.25
+    research_min_data_quality: float = 0.25
+    research_require_frequency_compatible: bool = True
     enabled_components: list[str] = field(
         default_factory=lambda: list(DEFAULT_COMPONENT_WEIGHTS)
     )
@@ -89,6 +96,12 @@ class MapiConfig:
         enabled = [name for name in self.enabled_components if name != component_name]
         return replace(self, enabled_components=enabled)
 
+    def fingerprint(self) -> str:
+        canonical = json.dumps(
+            asdict(self), sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        return sha256(canonical.encode("utf-8")).hexdigest()
+
     @property
     def already_realized_penalty(self) -> float:
         """Compatibility alias for directional_realization_penalty."""
@@ -100,14 +113,30 @@ class MapiConfig:
         self.directional_realization_penalty = value
 
     def validate(self, available_components: set[str] | None = None) -> None:
-        if self.score_semantics not in {"pure_anomaly", "legacy_actionability"}:
+        if self.score_semantics not in {
+            "intensity",
+            "alert",
+            "actionability",
+            "pure_anomaly",
+            "legacy_actionability",
+        }:
             raise ValueError(f"Invalid score_semantics: {self.score_semantics}")
         if self.research_score_column not in {
-            "mapi_score", "mapi_raw_score", "mapi_actionability_score"
+            "mapi_score",
+            "mapi_raw_score",
+            "mapi_intensity_score",
+            "mapi_alert_score",
+            "mapi_actionability_score",
         }:
             raise ValueError(
                 f"Invalid research_score_column: {self.research_score_column}"
             )
+        if not isfinite(self.research_fit_fraction) or not 0.0 < self.research_fit_fraction < 1.0:
+            raise ValueError("research_fit_fraction must be between zero and one")
+        for name in ("research_min_confidence", "research_min_data_quality"):
+            value = getattr(self, name)
+            if not isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
         explicitly_available = available_components or set()
         unknown = set(self.enabled_components) - KNOWN_COMPONENTS - explicitly_available
         if unknown:
@@ -145,7 +174,9 @@ class MapiConfig:
                 raise ValueError(
                     f"Horizon {name} requires 0 < min_periods <= rolling_window"
                 )
-            if horizon.expected_frequency not in {"any", "intraday", "daily"}:
+            if horizon.expected_frequency not in {
+                "any", "intraday", "daily", "weekly", "monthly"
+            }:
                 raise ValueError(
                     f"Horizon {name} has invalid expected_frequency: "
                     f"{horizon.expected_frequency}"
@@ -255,6 +286,9 @@ def _config_from_mapping(raw: dict[str, Any]) -> MapiConfig:
         "spread_bps",
         "slippage_bps",
         "large_move_threshold",
+        "research_fit_fraction",
+        "research_min_confidence",
+        "research_min_data_quality",
     ):
         if key in raw:
             setattr(config, key, float(raw[key]))
@@ -271,6 +305,10 @@ def _config_from_mapping(raw: dict[str, Any]) -> MapiConfig:
         config.deterministic_seed = int(raw["deterministic_seed"])
     if "adjusted_prices_required" in raw:
         config.adjusted_prices_required = bool(raw["adjusted_prices_required"])
+    if "research_require_frequency_compatible" in raw:
+        config.research_require_frequency_compatible = bool(
+            raw["research_require_frequency_compatible"]
+        )
     if "frequency_mismatch_policy" in raw:
         config.frequency_mismatch_policy = str(raw["frequency_mismatch_policy"])
     if "bootstrap_samples" in raw:

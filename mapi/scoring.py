@@ -26,6 +26,11 @@ from mapi.redundancy import compute_redundancy_penalties
 from mapi.realization import directional_realization_score
 from mapi.regimes import detect_market_regime
 from mapi.weights import WeightInputs, calculate_dynamic_weight
+from mapi.version import (
+    ALGORITHM_REVISION,
+    DATA_CONTRACT_VERSION,
+    IMPLEMENTATION_VERSION,
+)
 
 
 def default_components() -> list[AnomalyComponent]:
@@ -133,6 +138,7 @@ def _score_horizon(
     components: dict[str, AnomalyComponent],
     config: MapiConfig,
 ) -> pd.DataFrame:
+    config_fingerprint = config.fingerprint()
     penalties = compute_redundancy_penalties(
         component_frames,
         window=max(8, min(config.redundancy_window, horizon.rolling_window)),
@@ -165,11 +171,13 @@ def _score_horizon(
     anomaly_age = 0
     first_detected_at: object | None = None
     first_detected_price: float | None = None
-    previous_score = 0.0
+    previous_intensity = 0.0
     previous_state = "normal"
     component_base_sum = sum(
-        config.component_weights.get(name, 0.0) for name in component_frames
-    ) or 1.0
+        config.component_weights.get(name, 0.0)
+        * config.component_reliability.get(name, 1.0)
+        for name in component_frames
+    )
 
     for idx, timestamp in enumerate(prices.index):
         current_regime = str(regime_info["regime"].iloc[idx])
@@ -178,10 +186,13 @@ def _score_horizon(
             float(regime_info["regime_confidence"].iloc[idx]), 0.0, 1.0
         )
         component_signals: list[ComponentSignal] = []
-        effective_sum = 0.0
+        intensity_effective_sum = 0.0
+        alert_effective_sum = 0.0
         capacity_sum = 0.0
         direction_numerator = 0.0
         direction_denominator = 0.0
+        observed_numerator = 0.0
+        observed_denominator = 0.0
         confidence_numerator = 0.0
         confidence_denominator = 0.0
         evidence_weight_sum = 0.0
@@ -199,6 +210,7 @@ def _score_horizon(
                 base_weight,
                 WeightInputs(
                     regime=current_regime,
+                    regime_confidence=current_regime_confidence,
                     freshness=float(freshness.iloc[idx]),
                     reliability=config.component_reliability.get(component_name, 1.0),
                     liquidity=float(liquidity.iloc[idx]),
@@ -210,7 +222,11 @@ def _score_horizon(
                 name=component_name,
                 family=component.family,
                 anomaly_strength=clamp(float(row["anomaly_strength"]), 0.0, 1.0),
-                direction=clamp(float(row["direction"]), -1.0, 1.0),
+                direction=clamp(float(row["forecast_direction"]), -1.0, 1.0),
+                observed_pressure=clamp(
+                    float(row["observed_pressure"]), -1.0, 1.0
+                ),
+                direction_semantics=str(row["direction_semantics"]),
                 confidence=confidence,
                 weight=weight_decision.weight,
                 novelty=clamp(float(row["novelty"]), 0.0, 1.0),
@@ -224,48 +240,70 @@ def _score_horizon(
                 weight_factors=weight_decision.factors,
             )
             component_signals.append(signal)
-            effective = signal.effective_score
-            effective_sum += effective
+            intensity_effective = signal.intensity_effective_score
+            alert_effective = signal.alert_effective_score
+            intensity_effective_sum += intensity_effective
+            alert_effective_sum += alert_effective
             capacity = signal.weight * confidence * penalty
             capacity_sum += capacity
-            direction_numerator += signal.direction * effective
-            direction_denominator += abs(effective)
+            direction_numerator += signal.direction * alert_effective
+            direction_denominator += abs(alert_effective)
+            observed_numerator += signal.observed_pressure * intensity_effective
+            observed_denominator += abs(intensity_effective)
             confidence_numerator += confidence * signal.weight * penalty
             confidence_denominator += signal.weight * penalty
-            evidence_weight_sum += base_weight * confidence * penalty
+            reliability = config.component_reliability.get(component_name, 1.0)
+            evidence_weight_sum += base_weight * reliability * confidence * penalty
 
-        raw_score = 100.0 * effective_sum / capacity_sum if capacity_sum > 0 else 0.0
-        direction = (
+        intensity_score = (
+            100.0 * intensity_effective_sum / capacity_sum if capacity_sum > 0 else 0.0
+        )
+        novelty_score = (
+            100.0 * alert_effective_sum / intensity_effective_sum
+            if intensity_effective_sum > 0
+            else 0.0
+        )
+        alert_score = (
+            100.0 * alert_effective_sum / capacity_sum if capacity_sum > 0 else 0.0
+        )
+        forecast_direction = (
             direction_numerator / direction_denominator if direction_denominator > 0 else 0.0
+        )
+        observed_pressure = (
+            observed_numerator / observed_denominator if observed_denominator > 0 else 0.0
         )
         conditional_confidence = (
             confidence_numerator / confidence_denominator
             if confidence_denominator > 0
             else 0.0
         )
-        evidence_coverage = clamp(evidence_weight_sum / component_base_sum, 0.0, 1.0)
+        evidence_coverage = (
+            clamp(evidence_weight_sum / component_base_sum, 0.0, 1.0)
+            if component_base_sum > 0
+            else 0.0
+        )
         current_ohlcv_quality = float(ohlcv_quality.iloc[idx])
-        frequency_factor = 1.0 if frequency.compatible else 0.0
         data_quality = clamp(
-            current_ohlcv_quality * evidence_coverage * frequency_factor,
+            current_ohlcv_quality * evidence_coverage,
             0.0,
             1.0,
         )
         confidence = clamp(
             conditional_confidence
             * current_ohlcv_quality
-            * evidence_coverage
-            * frequency_factor,
+            * evidence_coverage,
             0.0,
             1.0,
         )
         confirmation_count = sum(
             1
             for component in component_signals
-            if component.anomaly_strength >= 0.5 and component.confidence >= 0.3
+            if component.weight > 0.0
+            and component.anomaly_strength >= 0.5
+            and component.confidence >= 0.3
         )
         prior_active = previous_state in {"emerging", "confirmed", "fading"}
-        if raw_score >= config.high_anomaly_threshold:
+        if intensity_score >= config.high_anomaly_threshold:
             if prior_active and first_detected_at is not None:
                 anomaly_age += 1
             else:
@@ -277,12 +315,12 @@ def _score_horizon(
                 "confirmed"
                 if anomaly_age >= 3
                 or (
-                    raw_score >= config.strong_anomaly_threshold
+                    intensity_score >= config.strong_anomaly_threshold
                     and confirmation_count >= 2
                 )
                 else "emerging"
             )
-        elif prior_active and raw_score >= 20.0:
+        elif prior_active and intensity_score >= 20.0:
             anomaly_age += 1
             state = "fading"
         elif prior_active:
@@ -293,7 +331,7 @@ def _score_horizon(
             first_detected_at = None
             first_detected_price = None
             state = "normal"
-        score_change = raw_score - previous_score
+        score_change = intensity_score - previous_intensity
         anomaly_trend = (
             "increasing" if score_change > 2.0 else "decreasing" if score_change < -2.0 else "stable"
         )
@@ -309,12 +347,12 @@ def _score_horizon(
                 )
         scale = float(realization_scale.iloc[idx])
         directional_realization = directional_realization_score(
-            direction,
+            forecast_direction,
             directional_move_since_detection,
             scale if pd.notna(scale) else 0.0,
         )
         actionability_score = clamp(
-            raw_score
+            alert_score
             * (
                 1.0
                 - config.directional_realization_penalty
@@ -325,14 +363,16 @@ def _score_horizon(
         )
         public_score = (
             actionability_score
-            if config.score_semantics == "legacy_actionability"
-            else clamp(raw_score, 0.0, 100.0)
+            if config.score_semantics in {"actionability", "legacy_actionability"}
+            else alert_score
+            if config.score_semantics == "alert"
+            else clamp(intensity_score, 0.0, 100.0)
         )
 
         reasons = dominant_anomalies(component_signals)
         summary = build_summary(
-            score=raw_score,
-            direction=direction,
+            score=intensity_score,
+            direction=forecast_direction,
             regime=current_regime,
             state=state,
             confirmation_count=confirmation_count,
@@ -343,9 +383,15 @@ def _score_horizon(
             timestamp=timestamp,
             horizon=horizon.name,
             mapi_score=public_score,
-            mapi_raw_score=raw_score,
+            mapi_raw_score=intensity_score,
+            mapi_intensity_score=intensity_score,
+            mapi_novelty_score=novelty_score,
+            mapi_alert_score=alert_score,
             mapi_actionability_score=actionability_score,
-            mapi_direction=direction,
+            mapi_direction=forecast_direction,
+            mapi_forecast_direction=forecast_direction,
+            mapi_observed_pressure=observed_pressure,
+            mapi_direction_semantics="hypothesized_forward_direction",
             mapi_confidence=confidence,
             mapi_regime=current_regime,
             regime_source=current_regime_source,
@@ -355,7 +401,11 @@ def _score_horizon(
             data_quality_score=data_quality,
             ohlcv_quality_score=current_ohlcv_quality,
             evidence_coverage_score=evidence_coverage,
-            signal_version=config.signal_version,
+            signal_version=ALGORITHM_REVISION,
+            implementation_version=IMPLEMENTATION_VERSION,
+            config_fingerprint=config_fingerprint,
+            algorithm_revision=ALGORITHM_REVISION,
+            data_contract_version=DATA_CONTRACT_VERSION,
             anomaly_state=state,
             anomaly_first_detected_at=first_detected_at,
             anomaly_age_bars=anomaly_age,
@@ -377,9 +427,15 @@ def _score_horizon(
                 "symbol": symbol,
                 "horizon": horizon.name,
                 "mapi_score": public_score,
-                "mapi_raw_score": raw_score,
+                "mapi_raw_score": intensity_score,
+                "mapi_intensity_score": intensity_score,
+                "mapi_novelty_score": novelty_score,
+                "mapi_alert_score": alert_score,
                 "mapi_actionability_score": actionability_score,
-                "mapi_direction": direction,
+                "mapi_direction": forecast_direction,
+                "mapi_forecast_direction": forecast_direction,
+                "mapi_observed_pressure": observed_pressure,
+                "mapi_direction_semantics": "hypothesized_forward_direction",
                 "mapi_confidence": confidence,
                 "mapi_regime": current_regime,
                 "regime_source": current_regime_source,
@@ -388,7 +444,11 @@ def _score_horizon(
                 "data_quality_score": data_quality,
                 "ohlcv_quality_score": current_ohlcv_quality,
                 "evidence_coverage_score": evidence_coverage,
-                "signal_version": config.signal_version,
+                "signal_version": ALGORITHM_REVISION,
+                "implementation_version": IMPLEMENTATION_VERSION,
+                "config_fingerprint": config_fingerprint,
+                "algorithm_revision": ALGORITHM_REVISION,
+                "data_contract_version": DATA_CONTRACT_VERSION,
                 "anomaly_state": state,
                 "anomaly_first_detected_at": first_detected_at,
                 "anomaly_age_bars": anomaly_age,
@@ -405,7 +465,7 @@ def _score_horizon(
                 "signal": signal,
             }
         )
-        previous_score = raw_score
+        previous_intensity = intensity_score
         previous_state = state
         if state == "invalidated":
             anomaly_age = 0

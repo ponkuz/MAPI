@@ -11,6 +11,7 @@ from mapi.models import HorizonConfig
 from mapi.realization import directional_realization_score
 from mapi.regimes import detect_market_regime
 from mapi.scoring import calculate_mapi
+from mapi.research.backtest import run_event_study
 from tests.helpers import make_ohlcv
 
 
@@ -52,11 +53,34 @@ class RegimeFrequencyRealizationTests(unittest.TestCase):
         }
         warned = calculate_mapi("TEST", make_ohlcv(30), config=config)["intraday"]
         self.assertFalse(bool(warned["horizon_frequency_compatible"].iloc[-1]))
-        self.assertEqual(float(warned["mapi_confidence"].iloc[-1]), 0.0)
+        self.assertGreaterEqual(float(warned["mapi_confidence"].iloc[-1]), 0.0)
         self.assertIsNotNone(warned["horizon_warning"].iloc[-1])
+        metrics = run_event_study(
+            warned,
+            make_ohlcv(30),
+            horizon_bars=1,
+            score_threshold=0.0,
+            min_direction=0.0,
+            require_frequency_compatible=True,
+        )
+        self.assertEqual(metrics.sample_count, 0)
+        self.assertGreater(metrics.excluded_frequency_mismatch_count, 0)
         config.frequency_mismatch_policy = "error"
         with self.assertRaisesRegex(ValueError, "expects intraday"):
             calculate_mapi("TEST", make_ohlcv(30), config=config)
+
+    def test_weekly_and_monthly_are_not_classified_as_daily(self) -> None:
+        horizon = HorizonConfig(
+            "daily", 2, 10, 4, expected_frequency="daily"
+        )
+        weekly = pd.date_range("2025-01-03", periods=12, freq="7D", tz="UTC")
+        monthly = pd.date_range("2025-01-31", periods=12, freq="30D", tz="UTC")
+        weekly_result = validate_horizon_frequency(weekly, horizon)
+        monthly_result = validate_horizon_frequency(monthly, horizon)
+        self.assertEqual(weekly_result.observed_frequency, "weekly")
+        self.assertEqual(monthly_result.observed_frequency, "monthly")
+        self.assertFalse(weekly_result.compatible)
+        self.assertFalse(monthly_result.compatible)
 
     def test_directional_realization_penalizes_only_aligned_continuation(self) -> None:
         self.assertEqual(directional_realization_score(1.0, -0.03, 0.05), 0.0)

@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from tests.helpers import make_ohlcv
+from mapi.version import ALGORITHM_REVISION, DATA_CONTRACT_VERSION
 
 
 class CliEndToEndTests(unittest.TestCase):
@@ -40,7 +41,7 @@ class CliEndToEndTests(unittest.TestCase):
                 "--benchmark",
                 str(benchmark_path),
                 "--config",
-                str(root / "configs" / "mapi_v0_2.yaml"),
+                str(root / "configs" / "mapi_v0_3.yaml"),
                 "--log-level",
                 "WARNING",
             ]
@@ -53,7 +54,12 @@ class CliEndToEndTests(unittest.TestCase):
             mapi_payload = json.loads(first_mapi.read_text(encoding="utf-8"))
             self.assertIn("mapi_short_term", mapi_payload)
             self.assertEqual(
-                mapi_payload["mapi_short_term"]["signal_version"], "mapi_v0.2"
+                mapi_payload["mapi_short_term"]["signal_version"],
+                ALGORITHM_REVISION,
+            )
+            self.assertEqual(
+                mapi_payload["mapi_short_term"]["data_contract_version"],
+                DATA_CONTRACT_VERSION,
             )
 
             backtest_path = temp / "event_study.json"
@@ -70,7 +76,7 @@ class CliEndToEndTests(unittest.TestCase):
                     "--benchmark",
                     str(benchmark_path),
                     "--config",
-                    str(root / "configs" / "mapi_v0_2.yaml"),
+                    str(root / "configs" / "mapi_v0_3.yaml"),
                     "--horizon",
                     "short_term",
                     "--output",
@@ -84,6 +90,12 @@ class CliEndToEndTests(unittest.TestCase):
             self.assertEqual(
                 backtest_payload["score_column_used"], "mapi_actionability_score"
             )
+            partition = backtest_payload["evaluation_partition"]
+            self.assertEqual(partition["fit_count"] + partition["test_count"], 140)
+            self.assertLess(partition["fit_end"], partition["test_start"])
+            self.assertAlmostEqual(
+                partition["fit_fraction"] + partition["test_fraction"], 1.0
+            )
             self.assertEqual(
                 backtest_payload["metrics"]["score_column_used"],
                 backtest_payload["score_column_used"],
@@ -93,6 +105,18 @@ class CliEndToEndTests(unittest.TestCase):
                     row["score_column_used"] == backtest_payload["score_column_used"]
                     for row in backtest_payload["score_buckets"]
                 )
+            )
+            full_mapi = next(
+                row for row in backtest_payload["ablation"]
+                if row["variant"] == "full_mapi"
+            )
+            self.assertEqual(
+                backtest_payload["metrics"]["sample_count"],
+                full_mapi["sample_count"],
+            )
+            self.assertEqual(
+                backtest_payload["metrics"]["direction_column_used"],
+                "mapi_forecast_direction",
             )
             self.assertTrue(
                 all(

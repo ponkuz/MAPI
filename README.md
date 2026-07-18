@@ -1,6 +1,6 @@
 # Stock AI Scout: Market Anomaly Pressure Index
 
-MAPI is an experimental, modular stock-market anomaly signal. Version 0.2 separates pure anomaly intensity (`mapi_score` and `mapi_raw_score`, 0-100), realization-adjusted opportunity (`mapi_actionability_score`, 0-100), directional pressure (`mapi_direction`, -1 to 1), and evidence quality (`mapi_confidence`, 0-1). It is a research instrument, not a profitability claim or trading recommendation.
+MAPI is an experimental, modular stock-market anomaly signal. Version 0.3 separates pure anomaly intensity (`mapi_intensity_score`, 0-100), recurrence retention (`mapi_novelty_score`, 0-100), recurrence-adjusted alerting (`mapi_alert_score`, 0-100), realization-adjusted opportunity (`mapi_actionability_score`, 0-100), forecast direction (`mapi_forecast_direction`, -1 to 1), observed pressure, and evidence quality. It is a research instrument, not a profitability claim or trading recommendation.
 
 This workspace did not contain an existing Stock AI Scout codebase or git history, so the implementation is a standalone Python package with explicit provider interfaces. It can be integrated behind the project's eventual data and signal APIs without coupling the indicator to a vendor.
 
@@ -20,13 +20,16 @@ For component `i`:
 ```text
 historical_extremeness_i = prior_only_percentile(strength_i)
 novelty_i   = historical_extremeness_i * (1 - near_identical_recurrence_i)
-effective_i = strength_i * confidence_i * weight_i * novelty_i * redundancy_penalty_i
+intensity_i = strength_i * confidence_i * weight_i * redundancy_penalty_i
+alert_i     = intensity_i * novelty_i
 capacity_i  = confidence_i * weight_i * redundancy_penalty_i
-raw_score   = 100 * sum(effective_i) / sum(capacity_i)
-actionability_score = raw_score * (1 - directional_realization_penalty * directional_realization_score)
+intensity_score = 100 * sum(intensity_i) / sum(capacity_i)
+novelty_score   = 100 * sum(alert_i) / sum(intensity_i)
+alert_score     = 100 * sum(alert_i) / sum(capacity_i)
+actionability_score = alert_score * (1 - directional_realization_penalty * directional_realization_score)
 ```
 
-In v0.2, `mapi_score == mapi_raw_score`; `mapi_actionability_score` carries the realization adjustment. `recent_move_extremeness` is descriptive only. `directional_realization_score` is positive only when price movement since `anomaly_first_detected_at` aligns with `mapi_direction`. The legacy `already_realized_score` field aliases `recent_move_extremeness` and no longer drives actionability. The legacy `configs/mapi_v0_1.yaml` keeps the old public-score selection behavior. `mapi_direction` is the effective-score-weighted mean of component directions. `mapi_confidence` combines conditional component confidence, independent evidence coverage, and OHLCV quality. All public outputs are clamped to their documented ranges.
+`mapi_raw_score` is a compatibility alias for intensity. `mapi_score` is selected by `score_semantics`; the v0.3 default is intensity. Anomaly state, age, trend, persistence, and confirmation use intensity and therefore are not invalidated solely by recurrence. `mapi_direction` aliases the explicit forecast-direction aggregate; `mapi_observed_pressure` remains separate. `recent_move_extremeness` is descriptive only. `directional_realization_score` is positive only when movement since `anomaly_first_detected_at` aligns with forecast direction. Old YAML files may select legacy public-score behavior, but they cannot relabel the implementation as an older algorithm revision. Output includes implementation, algorithm, data-contract, and config-fingerprint identifiers.
 
 ## Data flow
 
@@ -47,14 +50,14 @@ Stock OHLCV is required. Sector ETF and broad benchmark OHLCV are optional, but 
 Python 3.12+ with NumPy and pandas is required. PyYAML is optional because the bundled configuration uses the built-in simple YAML reader.
 
 ```powershell
-python examples\run_mapi.py --symbol AAPL --prices data\AAPL.csv --sector data\XLK.csv --benchmark data\SPY.csv --config configs\mapi_v0_2.yaml --output out\mapi_aapl.json
+python examples\run_mapi.py --symbol AAPL --prices data\AAPL.csv --sector data\XLK.csv --benchmark data\SPY.csv --config configs\mapi_v0_3.yaml --output out\mapi_aapl.json
 ```
 
 ```powershell
-python examples\run_backtest.py --symbol AAPL --prices data\AAPL.csv --sector data\XLK.csv --benchmark data\SPY.csv --config configs\mapi_v0_2.yaml --horizon short_term --output out\event_study_aapl.json
+python examples\run_backtest.py --symbol AAPL --prices data\AAPL.csv --sector data\XLK.csv --benchmark data\SPY.csv --config configs\mapi_v0_3.yaml --horizon short_term --output out\event_study_aapl.json
 ```
 
-The event-study CLI uses `research_score_column` from the configuration (`mapi_actionability_score` by default). Override it explicitly with `--score-column`; the JSON records `score_column_used`.
+The event-study CLI uses `research_score_column` from configuration (`mapi_actionability_score` by default). Override it with `--score-column`; JSON records the score and direction columns. One chronological split is created for the entire report. All metrics use the test mask, while baseline and ablation thresholds are fitted only on the fit mask. Configured confidence, data-quality, and frequency-compatibility gates apply to both matching and event selection.
 
 Programmatic use:
 
@@ -67,7 +70,7 @@ signals = calculate_latest_mapi(
     price_frame=stock_ohlcv,
     sector_frame=sector_ohlcv,
     benchmark_frame=benchmark_ohlcv,
-    config=load_config("configs/mapi_v0_2.yaml"),
+    config=load_config("configs/mapi_v0_3.yaml"),
 )
 ```
 
@@ -87,7 +90,7 @@ The defaults begin partial estimates at 8, 20, 40, and 80 bars by horizon. Full 
 python -m unittest discover -s tests -v
 ```
 
-The tests cover novelty recurrence, normalization, stale and mixed-frequency cross-assets, regime source, horizon validation, confidence coverage, component-level future mutation, directional realization, redundancy invariants, hand-calculated long/short OHLC paths, transaction costs, score-bucket isolation, matched-frequency controls, ablation horizons, configuration validation, JSON schema, and end-to-end CLI reproducibility. CI runs both `unittest` and `pytest` on Python 3.12 and 3.13.
+The tests cover novelty recurrence, score separation, normalization, stale and mixed-frequency cross-assets, regime source, horizon validation, confidence coverage, component-level future mutation, directional realization, redundancy invariants, hand-calculated long/short OHLC paths, transaction costs, score-bucket isolation, matched-frequency controls, ablation horizons, configuration validation, JSON schema, and end-to-end CLI reproducibility. The CI workflow is configured to run both `unittest` and `pytest` on Python 3.12 and 3.13. A revision is described as cross-version verified only after that revision's complete matrix is green.
 
 ## Known limitations
 

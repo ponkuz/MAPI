@@ -8,10 +8,11 @@ from mapi.data.validation import normalize_ohlcv
 from mapi.normalization import historical_zscore, rolling_percentile_rank
 from mapi.research.backtest import run_event_study
 from mapi.research.matching import (
+    apply_frequency_match,
+    candidate_mask,
     candidate_frequency,
     chronological_masks,
     fit_frequency_matched_threshold,
-    test_only_signals,
 )
 
 
@@ -22,6 +23,14 @@ def generate_baselines(
     sector_frame: pd.DataFrame | None = None,
     mapi_signals: pd.DataFrame | None = None,
     score_column: str = "mapi_score",
+    reference_score_threshold: float = 60.0,
+    min_direction: float = 0.10,
+    fit_mask: pd.Series | None = None,
+    test_mask: pd.Series | None = None,
+    min_confidence: float = 0.0,
+    min_data_quality: float = 0.0,
+    require_frequency_compatible: bool = False,
+    reference_direction_column: str = "mapi_direction",
 ) -> dict[str, pd.DataFrame]:
     prices = normalize_ohlcv(price_frame) if "timestamp" in price_frame.columns else price_frame
     close = prices["close"]
@@ -30,7 +39,9 @@ def generate_baselines(
     baselines["random_same_frequency"] = _random_signal(prices.index, seed, signal_frequency)
     baselines["previous_day_return"] = _frame(
         prices.index,
-        score=rolling_percentile_rank(returns.abs(), 60, 20).fillna(0.0) * 100.0,
+        score=rolling_percentile_rank(
+            returns.abs().shift(1), 60, 20
+        ).fillna(0.0) * 100.0,
         direction=np.sign(returns.shift(1).fillna(0.0)),
     )
     baselines["pure_volume_zscore"] = _frame(
@@ -44,25 +55,50 @@ def generate_baselines(
     baselines["moving_average_crossover"] = _moving_average_crossover(prices)
     baselines["rsi_reversal"] = _rsi_reversal(prices)
     baselines["macd_direction"] = _macd_direction(prices)
-    baselines["always_long_fixed_horizon"] = _frame(
-        prices.index,
-        score=pd.Series(100.0, index=prices.index),
-        direction=pd.Series(1.0, index=prices.index),
-    )
     if sector_frame is not None:
         baselines["sector_relative_strength"] = _sector_relative_strength(
             prices, sector_frame
         )
     if mapi_signals is not None:
+        aligned_mapi = mapi_signals.reindex(prices.index)
+        all_rows = pd.Series(True, index=prices.index)
+        reference_events = candidate_mask(
+            aligned_mapi,
+            score_column,
+            reference_score_threshold,
+            min_direction,
+            all_rows,
+            min_confidence,
+            min_data_quality,
+            require_frequency_compatible,
+            reference_direction_column,
+        )
+        baselines["same_event_times_always_long"] = _frame(
+            prices.index,
+            score=reference_events.astype(float) * 100.0,
+            direction=reference_events.astype(float),
+        )
         baselines["equal_weight_components"] = _equal_weight_components(mapi_signals)
         baselines["shuffled_mapi_scores"] = _shuffled_mapi(
-            mapi_signals, seed, score_column
+            mapi_signals,
+            seed,
+            score_column,
+            fit_mask,
+            test_mask,
+            reference_direction_column,
         )
         baselines["isolated_stock_sector_residual"] = _isolated_component(
             mapi_signals, "stock_sector_divergence"
         )
         baselines["isolated_volatility_anomaly"] = _isolated_component(
             mapi_signals, "volatility_anomaly"
+        )
+    else:
+        schedule = _deterministic_schedule(prices.index, signal_frequency)
+        baselines["same_event_times_always_long"] = _frame(
+            prices.index,
+            score=schedule.astype(float) * 100.0,
+            direction=schedule.astype(float),
         )
     return baselines
 
@@ -78,12 +114,22 @@ def compare_baselines(
     reference_score_threshold: float = 60.0,
     min_direction: float = 0.10,
     fit_fraction: float = 0.70,
+    fit_mask: pd.Series | None = None,
+    test_mask: pd.Series | None = None,
+    min_confidence: float = 0.0,
+    min_data_quality: float = 0.0,
+    require_frequency_compatible: bool = False,
+    reference_direction_column: str = "mapi_direction",
     **event_study_kwargs: object,
 ) -> pd.DataFrame:
     """Evaluate each negative control under identical event-study assumptions."""
 
     prices = normalize_ohlcv(price_frame) if "timestamp" in price_frame.columns else price_frame
-    fit_mask, test_mask = chronological_masks(prices.index, fit_fraction)
+    if fit_mask is None or test_mask is None:
+        fit_mask, test_mask = chronological_masks(prices.index, fit_fraction)
+    fit_mask = fit_mask.reindex(prices.index, fill_value=False)
+    test_mask = test_mask.reindex(prices.index, fill_value=False)
+    event_options = _event_options(event_study_kwargs)
     target_frequency = signal_frequency
     if mapi_signals is not None:
         target_frequency = candidate_frequency(
@@ -92,6 +138,10 @@ def compare_baselines(
             reference_score_threshold,
             min_direction,
             fit_mask,
+            min_confidence,
+            min_data_quality,
+            require_frequency_compatible,
+            reference_direction_column,
         )
     rows: list[dict[str, object]] = []
     for name, signals in generate_baselines(
@@ -101,6 +151,14 @@ def compare_baselines(
         sector_frame=sector_frame,
         mapi_signals=mapi_signals,
         score_column=reference_score_column,
+        reference_score_threshold=reference_score_threshold,
+        min_direction=min_direction,
+        fit_mask=fit_mask,
+        test_mask=test_mask,
+        min_confidence=min_confidence,
+        min_data_quality=min_data_quality,
+        require_frequency_compatible=require_frequency_compatible,
+        reference_direction_column=reference_direction_column,
     ).items():
         match = fit_frequency_matched_threshold(
             signals,
@@ -108,10 +166,24 @@ def compare_baselines(
             target_frequency,
             min_direction,
             fit_mask,
+            min_confidence,
+            min_data_quality,
+            require_frequency_compatible,
+            "mapi_forecast_direction",
         )
-        evaluation_signals = test_only_signals(signals, test_mask)
+        test_selection = apply_frequency_match(
+            signals,
+            "baseline_score",
+            match,
+            min_direction,
+            test_mask,
+            min_confidence,
+            min_data_quality,
+            require_frequency_compatible,
+            "mapi_forecast_direction",
+        )
         metrics = run_event_study(
-            evaluation_signals,
+            signals,
             prices,
             horizon_bars=horizon_bars,
             name=name,
@@ -119,7 +191,12 @@ def compare_baselines(
             min_direction=min_direction,
             score_column="baseline_score",
             evaluation_mask=test_mask,
-            **event_study_kwargs,
+            min_confidence=min_confidence,
+            min_data_quality=min_data_quality,
+            require_frequency_compatible=require_frequency_compatible,
+            direction_column="mapi_forecast_direction",
+            selection_mask=test_selection,
+            **event_options,
         )
         row = metrics.to_dict()
         row.update(
@@ -133,6 +210,11 @@ def compare_baselines(
                     match.threshold,
                     min_direction,
                     test_mask,
+                    min_confidence,
+                    min_data_quality,
+                    require_frequency_compatible,
+                    "mapi_forecast_direction",
+                    match,
                 ),
                 "selected_event_count": metrics.sample_count,
                 "excluded_overlap_count": metrics.overlapping_candidates_excluded,
@@ -144,7 +226,7 @@ def compare_baselines(
         _full_period_buy_and_hold(
             prices,
             test_mask,
-            event_study_kwargs,
+            event_options,
             reference_score_column,
         )
     )
@@ -161,12 +243,22 @@ def random_control_distribution(
     mapi_signals: pd.DataFrame | None = None,
     reference_score_column: str = "mapi_score",
     reference_score_threshold: float = 60.0,
+    fit_mask: pd.Series | None = None,
+    test_mask: pd.Series | None = None,
+    min_confidence: float = 0.0,
+    min_data_quality: float = 0.0,
+    require_frequency_compatible: bool = False,
+    reference_direction_column: str = "mapi_direction",
     **event_study_kwargs: object,
 ) -> pd.DataFrame:
     """Return multiple deterministic random-control outcomes, one per seed."""
 
     prices = normalize_ohlcv(price_frame) if "timestamp" in price_frame.columns else price_frame
-    fit_mask, test_mask = chronological_masks(prices.index, fit_fraction)
+    if fit_mask is None or test_mask is None:
+        fit_mask, test_mask = chronological_masks(prices.index, fit_fraction)
+    fit_mask = fit_mask.reindex(prices.index, fill_value=False)
+    test_mask = test_mask.reindex(prices.index, fill_value=False)
+    event_options = _event_options(event_study_kwargs)
     target_frequency = signal_frequency
     if mapi_signals is not None:
         target_frequency = candidate_frequency(
@@ -175,6 +267,10 @@ def random_control_distribution(
             reference_score_threshold,
             min_direction,
             fit_mask,
+            min_confidence,
+            min_data_quality,
+            require_frequency_compatible,
+            reference_direction_column,
         )
     rows: list[dict[str, object]] = []
     for seed in seeds:
@@ -185,9 +281,24 @@ def random_control_distribution(
             target_frequency,
             min_direction,
             fit_mask,
+            min_confidence,
+            min_data_quality,
+            require_frequency_compatible,
+            "mapi_forecast_direction",
+        )
+        test_selection = apply_frequency_match(
+            signals,
+            "baseline_score",
+            match,
+            min_direction,
+            test_mask,
+            min_confidence,
+            min_data_quality,
+            require_frequency_compatible,
+            "mapi_forecast_direction",
         )
         metrics = run_event_study(
-            test_only_signals(signals, test_mask),
+            signals,
             prices,
             horizon_bars=horizon_bars,
             name=f"random_seed_{seed}",
@@ -195,7 +306,12 @@ def random_control_distribution(
             min_direction=min_direction,
             score_column="baseline_score",
             evaluation_mask=test_mask,
-            **event_study_kwargs,
+            min_confidence=min_confidence,
+            min_data_quality=min_data_quality,
+            require_frequency_compatible=require_frequency_compatible,
+            direction_column="mapi_forecast_direction",
+            selection_mask=test_selection,
+            **event_options,
         )
         rows.append(
             {
@@ -210,6 +326,11 @@ def random_control_distribution(
                     match.threshold,
                     min_direction,
                     test_mask,
+                    min_confidence,
+                    min_data_quality,
+                    require_frequency_compatible,
+                    "mapi_forecast_direction",
+                    match,
                 ),
                 "selected_event_count": metrics.sample_count,
                 "excluded_overlap_count": metrics.overlapping_candidates_excluded,
@@ -219,12 +340,19 @@ def random_control_distribution(
     return pd.DataFrame(rows)
 
 
-def _frame(index: pd.Index, score: pd.Series, direction: pd.Series | np.ndarray) -> pd.DataFrame:
+def _frame(
+    index: pd.Index, score: pd.Series, direction: pd.Series | np.ndarray
+) -> pd.DataFrame:
+    forecast = pd.Series(direction, index=index).fillna(0.0).clip(-1.0, 1.0)
     return pd.DataFrame(
         {
             "baseline_score": pd.Series(score, index=index).fillna(0.0).clip(0.0, 100.0),
-            "mapi_direction": pd.Series(direction, index=index).fillna(0.0).clip(-1.0, 1.0),
+            "mapi_direction": forecast,
+            "mapi_forecast_direction": forecast,
+            "mapi_direction_semantics": "hypothesized_forward_direction",
             "mapi_confidence": 1.0,
+            "data_quality_score": 1.0,
+            "horizon_frequency_compatible": True,
         },
         index=index,
     )
@@ -311,23 +439,54 @@ def _equal_weight_components(signals: pd.DataFrame) -> pd.DataFrame:
         {
             "baseline_score": scores,
             "mapi_direction": directions,
+            "mapi_forecast_direction": directions,
+            "mapi_direction_semantics": "hypothesized_forward_direction",
             "mapi_confidence": confidences,
+            "data_quality_score": _source_column(
+                signals, "data_quality_score", 1.0
+            ),
+            "horizon_frequency_compatible": _source_column(
+                signals, "horizon_frequency_compatible", True
+            ),
         },
         index=signals.index,
     )
 
 
 def _shuffled_mapi(
-    signals: pd.DataFrame, seed: int, score_column: str
+    signals: pd.DataFrame,
+    seed: int,
+    score_column: str,
+    fit_mask: pd.Series | None,
+    test_mask: pd.Series | None,
+    direction_column: str,
 ) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     source_score = signals[score_column]
-    positions = rng.permutation(len(signals))
+    positions = np.arange(len(signals))
+    if fit_mask is None or test_mask is None:
+        positions = rng.permutation(len(signals))
+    else:
+        for partition in (fit_mask, test_mask):
+            partition_positions = np.flatnonzero(
+                partition.reindex(signals.index, fill_value=False).to_numpy()
+            )
+            positions[partition_positions] = rng.permutation(partition_positions)
+    source_direction = signals[direction_column]
+    source_confidence = _source_column(signals, "mapi_confidence", 1.0)
     return pd.DataFrame(
         {
             "baseline_score": source_score.to_numpy()[positions],
-            "mapi_direction": signals["mapi_direction"].to_numpy()[positions],
-            "mapi_confidence": signals["mapi_confidence"].to_numpy()[positions],
+            "mapi_direction": source_direction.to_numpy()[positions],
+            "mapi_forecast_direction": source_direction.to_numpy()[positions],
+            "mapi_direction_semantics": "hypothesized_forward_direction",
+            "mapi_confidence": source_confidence.to_numpy()[positions],
+            "data_quality_score": _source_column(
+                signals, "data_quality_score", 1.0
+            ),
+            "horizon_frequency_compatible": _source_column(
+                signals, "horizon_frequency_compatible", True
+            ),
         },
         index=signals.index,
     )
@@ -354,7 +513,15 @@ def _isolated_component(signals: pd.DataFrame, component_name: str) -> pd.DataFr
         {
             "baseline_score": scores,
             "mapi_direction": directions,
+            "mapi_forecast_direction": directions,
+            "mapi_direction_semantics": "hypothesized_forward_direction",
             "mapi_confidence": confidences,
+            "data_quality_score": _source_column(
+                signals, "data_quality_score", 1.0
+            ),
+            "horizon_frequency_compatible": _source_column(
+                signals, "horizon_frequency_compatible", True
+            ),
         },
         index=signals.index,
     )
@@ -394,3 +561,37 @@ def _full_period_buy_and_hold(
             "Full-period buy-and-hold is a capital-path benchmark, not an event study."
         ],
     }
+
+
+def _deterministic_schedule(index: pd.Index, frequency: float) -> pd.Series:
+    count = min(len(index), int(round(frequency * len(index))))
+    if frequency > 0.0 and count == 0 and len(index) > 0:
+        count = 1
+    selected = pd.Series(False, index=index)
+    if count > 0:
+        positions = np.linspace(0, len(index) - 1, count, dtype=int)
+        selected.iloc[np.unique(positions)] = True
+    return selected
+
+
+def _event_options(options: dict[str, object]) -> dict[str, object]:
+    reserved = {
+        "horizon_bars",
+        "name",
+        "score_threshold",
+        "min_direction",
+        "score_column",
+        "evaluation_mask",
+        "min_confidence",
+        "min_data_quality",
+        "require_frequency_compatible",
+        "direction_column",
+        "selection_mask",
+    }
+    return {name: value for name, value in options.items() if name not in reserved}
+
+
+def _source_column(
+    signals: pd.DataFrame, name: str, default: object
+) -> pd.Series:
+    return signals[name] if name in signals else pd.Series(default, index=signals.index)

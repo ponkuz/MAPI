@@ -46,6 +46,8 @@ class ComponentSignal:
     family: str
     anomaly_strength: float
     direction: float
+    observed_pressure: float
+    direction_semantics: str
     confidence: float
     weight: float
     novelty: float
@@ -57,14 +59,23 @@ class ComponentSignal:
     weight_factors: dict[str, float] = field(default_factory=dict)
 
     @property
-    def effective_score(self) -> float:
+    def intensity_effective_score(self) -> float:
         return (
             clamp(self.anomaly_strength, 0.0, 1.0)
             * clamp(self.confidence, 0.0, 1.0)
             * clamp(self.weight, 0.0, 1.0)
-            * clamp(self.novelty, 0.0, 1.0)
             * clamp(self.redundancy_penalty, 0.0, 1.0)
         )
+
+    @property
+    def alert_effective_score(self) -> float:
+        return self.intensity_effective_score * clamp(self.novelty, 0.0, 1.0)
+
+    @property
+    def effective_score(self) -> float:
+        """Compatibility alias for the recurrence-adjusted alert contribution."""
+
+        return self.alert_effective_score
 
     def to_dict(self) -> dict[str, Any]:
         return json_safe(
@@ -73,6 +84,9 @@ class ComponentSignal:
                 "family": self.family,
                 "anomaly_strength": clamp(self.anomaly_strength, 0.0, 1.0),
                 "direction": clamp(self.direction, -1.0, 1.0),
+                "forecast_direction": clamp(self.direction, -1.0, 1.0),
+                "observed_pressure": clamp(self.observed_pressure, -1.0, 1.0),
+                "direction_semantics": self.direction_semantics,
                 "confidence": clamp(self.confidence, 0.0, 1.0),
                 "weight": clamp(self.weight, 0.0, 1.0),
                 "novelty": clamp(self.novelty, 0.0, 1.0),
@@ -81,6 +95,8 @@ class ComponentSignal:
                 ),
                 "recurrence_rate": clamp(self.recurrence_rate, 0.0, 1.0),
                 "redundancy_penalty": clamp(self.redundancy_penalty, 0.0, 1.0),
+                "intensity_effective_score": self.intensity_effective_score,
+                "alert_effective_score": self.alert_effective_score,
                 "effective_score": self.effective_score,
                 "reason": self.reason,
                 "metrics": self.metrics,
@@ -96,8 +112,14 @@ class MapiSignal:
     horizon: str
     mapi_score: float
     mapi_raw_score: float
+    mapi_intensity_score: float
+    mapi_novelty_score: float
+    mapi_alert_score: float
     mapi_actionability_score: float
     mapi_direction: float
+    mapi_forecast_direction: float
+    mapi_observed_pressure: float
+    mapi_direction_semantics: str
     mapi_confidence: float
     mapi_regime: str
     regime_source: str
@@ -108,6 +130,10 @@ class MapiSignal:
     ohlcv_quality_score: float
     evidence_coverage_score: float
     signal_version: str
+    implementation_version: str
+    config_fingerprint: str
+    algorithm_revision: str
+    data_contract_version: str
     anomaly_state: str
     anomaly_first_detected_at: Any | None
     anomaly_age_bars: int
@@ -131,10 +157,26 @@ class MapiSignal:
                 "horizon": self.horizon,
                 "mapi_score": round(clamp(self.mapi_score, 0.0, 100.0), 4),
                 "mapi_raw_score": round(clamp(self.mapi_raw_score, 0.0, 100.0), 4),
+                "mapi_intensity_score": round(
+                    clamp(self.mapi_intensity_score, 0.0, 100.0), 4
+                ),
+                "mapi_novelty_score": round(
+                    clamp(self.mapi_novelty_score, 0.0, 100.0), 4
+                ),
+                "mapi_alert_score": round(
+                    clamp(self.mapi_alert_score, 0.0, 100.0), 4
+                ),
                 "mapi_actionability_score": round(
                     clamp(self.mapi_actionability_score, 0.0, 100.0), 4
                 ),
                 "mapi_direction": round(clamp(self.mapi_direction, -1.0, 1.0), 4),
+                "mapi_forecast_direction": round(
+                    clamp(self.mapi_forecast_direction, -1.0, 1.0), 4
+                ),
+                "mapi_observed_pressure": round(
+                    clamp(self.mapi_observed_pressure, -1.0, 1.0), 4
+                ),
+                "mapi_direction_semantics": self.mapi_direction_semantics,
                 "mapi_confidence": round(clamp(self.mapi_confidence, 0.0, 1.0), 4),
                 "mapi_regime": self.mapi_regime,
                 "regime_source": self.regime_source,
@@ -153,6 +195,10 @@ class MapiSignal:
                     clamp(self.evidence_coverage_score, 0.0, 1.0), 4
                 ),
                 "signal_version": self.signal_version,
+                "implementation_version": self.implementation_version,
+                "config_fingerprint": self.config_fingerprint,
+                "algorithm_revision": self.algorithm_revision,
+                "data_contract_version": self.data_contract_version,
                 "anomaly_state": self.anomaly_state,
                 "anomaly_first_detected_at": self.anomaly_first_detected_at,
                 "anomaly_age_bars": self.anomaly_age_bars,
@@ -196,7 +242,7 @@ class BacktestMetrics:
     bootstrap_samples: int
     maximum_drawdown: float
     profit_factor: float
-    information_coefficient: float
+    active_event_ic: float
     mean_intrabar_mfe: float
     mean_intrabar_mae: float
     mean_absolute_return: float
@@ -208,6 +254,10 @@ class BacktestMetrics:
     non_overlapping: bool = True
     overlapping_candidates_excluded: int = 0
     score_column_used: str = "mapi_score"
+    direction_column_used: str = "mapi_forecast_direction"
+    excluded_low_confidence_count: int = 0
+    excluded_low_quality_count: int = 0
+    excluded_frequency_mismatch_count: int = 0
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -242,6 +292,12 @@ class BacktestMetrics:
     def breakout_rate(self) -> float:
         return self.intrabar_breakout_rate
 
+    @property
+    def information_coefficient(self) -> float:
+        """Compatibility alias; the statistic uses selected events only."""
+
+        return self.active_event_ic
+
     def to_dict(self) -> dict[str, Any]:
         payload = dict(self.__dict__)
         payload.update(
@@ -254,14 +310,16 @@ class BacktestMetrics:
                 "mean_mfe": self.mean_mfe,
                 "mean_mae": self.mean_mae,
                 "breakout_rate": self.breakout_rate,
+                "information_coefficient": self.information_coefficient,
                 "event_return_sharpe": self.event_return_mean_to_std,
                 "event_sequence_drawdown": self.maximum_drawdown,
                 "event_profit_factor": self.profit_factor,
             }
         )
         compatibility_warning = (
-            "Legacy hit_rate/precision/recall/Sharpe/Sortino/MFE/MAE/breakout "
-            "fields are compatibility aliases; use the explicitly named event metrics."
+            "Legacy hit_rate/precision/recall/Sharpe/Sortino/MFE/MAE/breakout and "
+            "information_coefficient fields are compatibility aliases; use the explicitly "
+            "named event metrics, including active_event_ic."
         )
         payload["warnings"] = [*self.warnings, compatibility_warning]
         return json_safe(payload)

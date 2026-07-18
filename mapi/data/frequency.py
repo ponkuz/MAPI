@@ -25,7 +25,14 @@ def validate_horizon_frequency(
     if gaps.empty:
         return FrequencyValidation(None, "unknown", False, "Input frequency is unknown")
     median_seconds = float(gaps.median())
-    observed = "intraday" if median_seconds < 20.0 * 60.0 * 60.0 else "daily"
+    if median_seconds < 20.0 * 60.0 * 60.0:
+        observed = "intraday"
+    elif median_seconds <= 4.0 * 24.0 * 60.0 * 60.0:
+        observed = "daily"
+    elif median_seconds <= 10.0 * 24.0 * 60.0 * 60.0:
+        observed = "weekly"
+    else:
+        observed = "monthly"
     expected = horizon.expected_frequency
     compatible = expected == "any" or expected == observed
     warning = None

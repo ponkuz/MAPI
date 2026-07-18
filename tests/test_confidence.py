@@ -170,6 +170,30 @@ class ConfidenceCoverageTests(unittest.TestCase):
                 atol=1e-12,
             )
 
+    def test_zero_reliability_does_not_add_coverage_or_confirmation(self) -> None:
+        config = coverage_config()
+        config.enabled_components = config.enabled_components[:2]
+        config.component_weights = {name: 0.5 for name in config.enabled_components}
+        config.component_reliability = {
+            config.enabled_components[0]: 1.0,
+            config.enabled_components[1]: 0.0,
+        }
+        components = [
+            FixedComponent(config.enabled_components[0], 1.0),
+            FixedComponent(config.enabled_components[1], 1.0),
+        ]
+        latest = calculate_mapi(
+            "TEST", make_ohlcv(50, seed=24), config=config, components=components
+        )["test"].iloc[-1]
+        self.assertAlmostEqual(float(latest["evidence_coverage_score"]), 1.0)
+        self.assertEqual(int(latest["confirmation_count"]), 1)
+        disabled = next(
+            component
+            for component in latest["signal"].anomaly_components
+            if component.name == config.enabled_components[1]
+        )
+        self.assertEqual(disabled.weight, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,8 +6,9 @@ must be validated out of sample before any practical use.
 
 from mapi.config import MapiConfig, load_config
 from mapi.scoring import calculate_latest_mapi, calculate_mapi
+from mapi.version import IMPLEMENTATION_VERSION
 
-__version__ = "0.2.0"
+__version__ = IMPLEMENTATION_VERSION
 
 __all__ = [
     "MapiConfig",

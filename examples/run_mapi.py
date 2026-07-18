@@ -26,7 +26,7 @@ def main() -> None:
     parser.add_argument("--prices", required=True)
     parser.add_argument("--sector")
     parser.add_argument("--benchmark")
-    parser.add_argument("--config", default="configs/mapi_v0_2.yaml")
+    parser.add_argument("--config", default="configs/mapi_v0_3.yaml")
     parser.add_argument("--output")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()

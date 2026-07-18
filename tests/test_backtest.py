@@ -158,6 +158,65 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(float(labels.iloc[5]["forward_return"]), 0.0)
         self.assertEqual(float(labels.iloc[5]["intrabar_breakout"]), 1.0)
 
+    def test_intrabar_excursions_include_zero_at_entry(self) -> None:
+        timestamps = pd.date_range("2025-03-03", periods=5, freq="B", tz="UTC")
+        falling = normalize_ohlcv(
+            pd.DataFrame(
+                {
+                    "timestamp": timestamps,
+                    "open": [100.0, 100.0, 96.0, 95.0, 95.0],
+                    "high": [101.0, 101.0, 99.0, 98.0, 96.0],
+                    "low": [99.0, 99.0, 94.0, 93.0, 94.0],
+                    "close": [100.0, 100.0, 95.0, 94.0, 95.0],
+                    "volume": 1000.0,
+                }
+            )
+        )
+        rising = normalize_ohlcv(
+            pd.DataFrame(
+                {
+                    "timestamp": timestamps,
+                    "open": [100.0, 100.0, 104.0, 105.0, 105.0],
+                    "high": [101.0, 101.0, 106.0, 107.0, 106.0],
+                    "low": [99.0, 99.0, 101.0, 102.0, 104.0],
+                    "close": [100.0, 100.0, 105.0, 106.0, 105.0],
+                    "volume": 1000.0,
+                }
+            )
+        )
+        falling_labels = forward_path_metrics(falling, 2, 1)
+        rising_labels = forward_path_metrics(rising, 2, 1)
+        self.assertEqual(float(falling_labels.iloc[0]["intrabar_mfe"]), 0.0)
+        self.assertEqual(float(rising_labels.iloc[0]["intrabar_mae"]), 0.0)
+
+    def test_evidence_quality_gates_and_exclusion_counts(self) -> None:
+        signals = pd.DataFrame(
+            {
+                "mapi_score": 100.0,
+                "mapi_direction": 1.0,
+                "mapi_confidence": [0.1, 1.0, 1.0, 1.0] * 20,
+                "data_quality_score": [1.0, 0.1, 1.0, 1.0] * 20,
+                "horizon_frequency_compatible": [True, True, False, True] * 20,
+            },
+            index=self.prices.index,
+        )
+        metrics = run_event_study(
+            signals,
+            self.prices,
+            horizon_bars=1,
+            min_confidence=0.5,
+            min_data_quality=0.5,
+            require_frequency_compatible=True,
+            transaction_cost_bps=0.0,
+            spread_bps=0.0,
+            slippage_bps=0.0,
+        )
+        self.assertGreater(metrics.sample_count, 0)
+        self.assertEqual(metrics.excluded_low_confidence_count, 20)
+        self.assertEqual(metrics.excluded_low_quality_count, 20)
+        self.assertEqual(metrics.excluded_frequency_mismatch_count, 20)
+        self.assertIn("active_event_ic", metrics.to_dict())
+
     def test_round_trip_cost_is_charged_once(self) -> None:
         signals = pd.DataFrame(
             {"mapi_score": 100.0, "mapi_direction": 1.0}, index=self.prices.index
