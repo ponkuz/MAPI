@@ -117,7 +117,7 @@ This source audit does not establish profitability. No parameter was tuned again
 - **Regression:** CI matrix declares Python 3.12 and 3.13 and runs full `unittest`, full `pytest`, both CLI paths, and configuration validation.
 - **Before/after:** cross-version verification is automated on push and pull request instead of inferred from one local runtime.
 - **Compatibility:** CI installs the existing `.[dev]` extra; package runtime requirements are unchanged.
-- **Uncertainty:** commit `0db7bbe` completed a green 3.12/3.13 matrix. The current v0.3 revision has only local Python 3.13 verification until its own pushed CI matrix completes.
+- **Uncertainty:** implementation commit `8e5cf4398e3e8d6341071a8eed71ae8032c647e8` completed the full Python 3.12/3.13 matrix in GitHub Actions run `29637248281`; this does not cover future environment or dependency changes.
 
 ## 14. One chronological CLI partition
 
@@ -197,7 +197,7 @@ This source audit does not establish profitability. No parameter was tuned again
 - **Files/lines:** `mapi/data/frequency.py:27-35`; `mapi/weights.py:51-55`; `mapi/scoring.py:176-181,276-303`; `mapi/models.py:245,296-322`; `.github/workflows/ci.yml:16,31-40`; `tests/test_regime_frequency_realization.py:72-84`; `tests/test_confidence.py:173-196`; `tests/test_config_validation.py:93-120`.
 - **Regression:** interval-range classification distinguishes four frequencies; zero regime confidence produces a neutral multiplier; zero reliability adds no coverage or confirmation; output contains canonical `active_event_ic`.
 - **Before/after:** regime effects interpolate toward neutral by confidence, reliable component weight defines coverage capacity, and the selected-event correlation name states its evaluation universe.
-- **Compatibility:** `information_coefficient` remains a warning-labeled alias. Weekly/monthly inputs can now fail daily expectations. Current v0.3 results are reported as local Python 3.13 verification only.
+- **Compatibility:** `information_coefficient` remains a warning-labeled alias. Weekly/monthly inputs can now fail daily expectations. Implementation commit `8e5cf4398e3e8d6341071a8eed71ae8032c647e8` is cross-version verified by the completed green Python 3.12/3.13 CI matrix.
 - **Uncertainty:** interval buckets remain calendar-agnostic, regime confidence is heuristic, and selected-event IC remains selection-conditioned.
 
 ## Remaining system-level limits
