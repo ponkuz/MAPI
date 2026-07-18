@@ -10,7 +10,6 @@ from mapi.normalization import (
     close_location_value,
     historical_zscore,
     event_novelty,
-    robust_unit_score_from_z,
     signed_unit_from_z,
 )
 
@@ -74,7 +73,19 @@ class PriceVolumeDivergence:
             signed_unit_from_z(price_z, scale=2.0) * 0.6
             + signed_unit_from_z(flow_z, scale=2.0) * 0.4
         ).clip(-1.0, 1.0)
-        forecast_direction = observed_pressure
+        (
+            forecast_direction,
+            directional_evidence_strength,
+            direction_semantics,
+            anomaly_subtype,
+        ) = _price_volume_direction_contract(
+            breakout_on_weak_volume=breakout_on_weak_volume,
+            high_volume_flat_price=high_volume_flat_price,
+            large_move_low_volume=large_move_low_volume,
+            directional_flow_mismatch=directional_flow_mismatch,
+            price_z=price_z,
+            flow_z=flow_z,
+        )
         coverage = volume.where(volume > 0.0).rolling(
             horizon.rolling_window, min_periods=1
         ).count() / float(horizon.rolling_window)
@@ -85,10 +96,10 @@ class PriceVolumeDivergence:
 
         labels = np.select(
             [
-                breakout_on_weak_volume > 0.0,
-                high_volume_flat_price > 0.45,
-                large_move_low_volume > 0.35,
-                directional_flow_mismatch > 0.0,
+                anomaly_subtype == "breakout_on_weak_volume",
+                anomaly_subtype == "high_volume_flat_price",
+                anomaly_subtype == "large_move_low_volume",
+                anomaly_subtype == "directional_flow_mismatch",
             ],
             [
                 "Price broke a prior high while volume was weaker than its recent baseline",
@@ -112,6 +123,7 @@ class PriceVolumeDivergence:
                 "directional_flow_mismatch": float(
                     directional_flow_mismatch.iloc[i]
                 ),
+                "anomaly_subtype": str(anomaly_subtype.iloc[i]),
             }
             for i in range(len(price_frame))
         ]
@@ -121,7 +133,9 @@ class PriceVolumeDivergence:
                 "direction": forecast_direction,
                 "forecast_direction": forecast_direction,
                 "observed_pressure": observed_pressure,
-                "direction_semantics": "continuation_hypothesis_from_directional_flow",
+                "directional_evidence_strength": directional_evidence_strength,
+                "direction_semantics": direction_semantics,
+                "direction_contract_warning": None,
                 "confidence": confidence,
                 "novelty": novelty["novelty"].fillna(0.0),
                 "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),
@@ -132,3 +146,74 @@ class PriceVolumeDivergence:
             index=price_frame.index,
         )
         return finalize_component_frame(frame, price_frame.index, labels[0] if len(labels) else "")
+
+
+def _price_volume_direction_contract(
+    breakout_on_weak_volume: pd.Series,
+    high_volume_flat_price: pd.Series,
+    large_move_low_volume: pd.Series,
+    directional_flow_mismatch: pd.Series,
+    price_z: pd.Series,
+    flow_z: pd.Series,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    subtype_scores = pd.DataFrame(
+        {
+            "breakout_on_weak_volume": breakout_on_weak_volume,
+            "high_volume_flat_price": high_volume_flat_price,
+            "large_move_low_volume": large_move_low_volume,
+            "directional_flow_mismatch": directional_flow_mismatch,
+        }
+    ).fillna(0.0)
+    dominant_strength = subtype_scores.max(axis=1)
+    anomaly_subtype = subtype_scores.idxmax(axis=1).where(
+        dominant_strength > 0.0, "baseline"
+    )
+    breakout = anomaly_subtype == "breakout_on_weak_volume"
+    flat_price = anomaly_subtype == "high_volume_flat_price"
+    low_volume_move = anomaly_subtype == "large_move_low_volume"
+    flow_mismatch = anomaly_subtype == "directional_flow_mismatch"
+
+    price_pressure = signed_unit_from_z(price_z, scale=2.0)
+    flow_pressure = signed_unit_from_z(flow_z, scale=2.0)
+    forecast_direction = pd.Series(0.0, index=subtype_scores.index, dtype=float)
+    forecast_direction.loc[breakout] = -dominant_strength.loc[breakout]
+    forecast_direction.loc[low_volume_move] = (
+        -price_pressure.loc[low_volume_move] * dominant_strength.loc[low_volume_move]
+    )
+    forecast_direction.loc[flow_mismatch] = (
+        flow_pressure.loc[flow_mismatch] * dominant_strength.loc[flow_mismatch]
+    )
+    forecast_direction = forecast_direction.clip(-1.0, 1.0)
+
+    directional_evidence_strength = (
+        breakout | low_volume_move | flow_mismatch
+    ).astype(float)
+    direction_semantics = pd.Series(
+        np.select(
+            [
+                breakout,
+                flat_price,
+                low_volume_move & (price_z < 0.0),
+                low_volume_move & (price_z >= 0.0),
+                flow_mismatch & (flow_z > 0.0),
+                flow_mismatch & (flow_z <= 0.0),
+            ],
+            [
+                "reversal_hypothesis_bearish_weak_volume_breakout",
+                "direction_neutral_high_volume_flat_price",
+                "reversal_hypothesis_bullish_large_down_move_low_volume",
+                "reversal_hypothesis_bearish_large_up_move_low_volume",
+                "reversal_hypothesis_bullish_directional_flow_against_price",
+                "reversal_hypothesis_bearish_directional_flow_against_price",
+            ],
+            default="direction_neutral_price_volume_baseline",
+        ),
+        index=subtype_scores.index,
+        dtype=object,
+    )
+    return (
+        forecast_direction,
+        directional_evidence_strength,
+        direction_semantics,
+        anomaly_subtype.astype(str),
+    )

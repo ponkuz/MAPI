@@ -117,6 +117,7 @@ class MarketRegimeDivergence:
                 "direction": forecast_direction,
                 "forecast_direction": forecast_direction,
                 "observed_pressure": observed_pressure,
+                "directional_evidence_strength": directional_evidence.astype(float),
                 "direction_semantics": direction_semantics,
                 "direction_contract_warning": None,
                 "confidence": confidence,

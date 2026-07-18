@@ -146,6 +146,7 @@ class StockSectorDivergence:
                 "direction": forecast_direction,
                 "forecast_direction": forecast_direction,
                 "observed_pressure": observed_pressure,
+                "directional_evidence_strength": residual_forecast.astype(float),
                 "direction_semantics": direction_semantics,
                 "direction_contract_warning": None,
                 "confidence": confidence,

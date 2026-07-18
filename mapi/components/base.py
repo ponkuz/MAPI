@@ -38,6 +38,7 @@ def empty_component_frame(index: pd.Index, reason: str = "") -> pd.DataFrame:
             "direction": 0.0,
             "forecast_direction": 0.0,
             "observed_pressure": 0.0,
+            "directional_evidence_strength": 0.0,
             "direction_semantics": "direction_neutral_unavailable",
             "direction_contract_warning": None,
             "confidence": 0.0,
@@ -64,12 +65,18 @@ def finalize_component_frame(
     if "observed_pressure" not in output:
         output["observed_pressure"] = output.get("direction", 0.0)
         fallback_fields.append("observed_pressure")
+    if "directional_evidence_strength" not in output:
+        output["directional_evidence_strength"] = (
+            output["forecast_direction"].astype(float).abs() > 0.0
+        ).astype(float)
+        fallback_fields.append("directional_evidence_strength")
     output["direction"] = output["forecast_direction"]
     for column, default in {
         "anomaly_strength": 0.0,
         "direction": 0.0,
         "forecast_direction": 0.0,
         "observed_pressure": 0.0,
+        "directional_evidence_strength": 0.0,
         "confidence": 0.0,
         "novelty": 0.0,
         "historical_extremeness": 0.0,

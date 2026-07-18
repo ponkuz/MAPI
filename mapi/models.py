@@ -47,6 +47,7 @@ class ComponentSignal:
     anomaly_strength: float
     direction: float
     observed_pressure: float
+    directional_evidence_strength: float
     direction_semantics: str
     confidence: float
     weight: float
@@ -87,6 +88,9 @@ class ComponentSignal:
                 "direction": clamp(self.direction, -1.0, 1.0),
                 "forecast_direction": clamp(self.direction, -1.0, 1.0),
                 "observed_pressure": clamp(self.observed_pressure, -1.0, 1.0),
+                "directional_evidence_strength": clamp(
+                    self.directional_evidence_strength, 0.0, 1.0
+                ),
                 "direction_semantics": self.direction_semantics,
                 "direction_contract_warning": self.direction_contract_warning,
                 "confidence": clamp(self.confidence, 0.0, 1.0),

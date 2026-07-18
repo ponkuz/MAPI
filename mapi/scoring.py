@@ -231,6 +231,9 @@ def _score_horizon(
                 observed_pressure=clamp(
                     float(row["observed_pressure"]), -1.0, 1.0
                 ),
+                directional_evidence_strength=clamp(
+                    float(row["directional_evidence_strength"]), 0.0, 1.0
+                ),
                 direction_semantics=str(row["direction_semantics"]),
                 confidence=confidence,
                 weight=weight_decision.weight,
@@ -256,8 +259,11 @@ def _score_horizon(
             alert_effective_sum += alert_effective
             capacity = signal.weight * confidence * penalty
             capacity_sum += capacity
-            direction_numerator += signal.direction * alert_effective
-            direction_denominator += abs(alert_effective)
+            directional_alert = (
+                alert_effective * signal.directional_evidence_strength
+            )
+            direction_numerator += signal.direction * directional_alert
+            direction_denominator += abs(directional_alert)
             observed_numerator += signal.observed_pressure * intensity_effective
             observed_denominator += abs(intensity_effective)
             confidence_numerator += confidence * signal.weight * penalty
@@ -403,7 +409,9 @@ def _score_horizon(
             mapi_direction=forecast_direction,
             mapi_forecast_direction=forecast_direction,
             mapi_observed_pressure=observed_pressure,
-            mapi_direction_semantics="hypothesized_forward_direction",
+            mapi_direction_semantics=(
+                "weighted_component_forecast_direction_excluding_no_view"
+            ),
             mapi_confidence=confidence,
             mapi_regime=current_regime,
             regime_source=current_regime_source,
@@ -449,7 +457,9 @@ def _score_horizon(
                 "mapi_direction": forecast_direction,
                 "mapi_forecast_direction": forecast_direction,
                 "mapi_observed_pressure": observed_pressure,
-                "mapi_direction_semantics": "hypothesized_forward_direction",
+                "mapi_direction_semantics": (
+                    "weighted_component_forecast_direction_excluding_no_view"
+                ),
                 "mapi_confidence": confidence,
                 "mapi_regime": current_regime,
                 "regime_source": current_regime_source,

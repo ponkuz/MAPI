@@ -59,7 +59,10 @@ class MomentumDisagreement:
         observed_pressure = (
             (short_signal * 0.65) + (medium_signal * 0.35)
         ).clip(-1.0, 1.0)
-        timescale_forecast = (short_signal * timescale_disagreement).clip(-1.0, 1.0)
+        timescale_evidence = timescale_disagreement > 0.0
+        timescale_forecast = (
+            short_signal * timescale_disagreement
+        ).where(timescale_evidence, 0.0).clip(-1.0, 1.0)
         forecast_direction = pd.Series(
             np.select(
                 [new_high_nonconfirm > 0.0, new_low_nonconfirm > 0.0],
@@ -69,6 +72,32 @@ class MomentumDisagreement:
             index=price_frame.index,
             dtype=float,
         ).clip(-1.0, 1.0)
+        directional_evidence_strength = pd.Series(
+            np.select(
+                [
+                    new_high_nonconfirm > 0.0,
+                    new_low_nonconfirm > 0.0,
+                    timescale_evidence,
+                ],
+                [1.0, 1.0, 1.0],
+                default=0.0,
+            ),
+            index=price_frame.index,
+            dtype=float,
+        )
+        direction_semantics = np.select(
+            [
+                new_high_nonconfirm > 0.0,
+                new_low_nonconfirm > 0.0,
+                timescale_evidence,
+            ],
+            [
+                "reversal_hypothesis_bearish_new_high_nonconfirmation",
+                "reversal_hypothesis_bullish_new_low_nonconfirmation",
+                "continuation_hypothesis_short_term_momentum_dominance",
+            ],
+            default="direction_neutral_momentum_alignment",
+        )
         coverage = close.rolling(horizon.rolling_window, min_periods=1).count() / float(
             horizon.rolling_window
         )
@@ -120,7 +149,9 @@ class MomentumDisagreement:
                 "direction": forecast_direction,
                 "forecast_direction": forecast_direction,
                 "observed_pressure": observed_pressure,
-                "direction_semantics": "hypothesized_forward_direction",
+                "directional_evidence_strength": directional_evidence_strength,
+                "direction_semantics": direction_semantics,
+                "direction_contract_warning": None,
                 "confidence": confidence,
                 "novelty": novelty["novelty"].fillna(0.0),
                 "historical_extremeness": novelty["historical_extremeness"].fillna(0.0),

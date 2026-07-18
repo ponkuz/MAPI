@@ -322,7 +322,11 @@ def run_configured_event_study(
     min_direction: float = 0.10,
     **overrides: object,
 ) -> BacktestMetrics:
-    """Run the event study with the same evidence policy used by the CLI."""
+    """Apply CLI-equivalent event eligibility and configured study settings.
+
+    The caller must pass ``evaluation_mask`` when holdout-only evaluation is
+    required; this helper does not create the CLI chronological partition.
+    """
 
     config.validate()
     if horizon_name not in config.horizons:

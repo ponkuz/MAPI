@@ -1,4 +1,4 @@
-# MAPI v0.2 to v0.3.1 targeted source audit
+# MAPI v0.2 to v0.3.2 targeted source audit
 
 This source audit does not establish profitability. No parameter was tuned against the final test set. Each item below records the confirmed finding, changed files, regression coverage, behavioral change, compatibility effect, and remaining methodological uncertainty.
 
@@ -197,7 +197,7 @@ This source audit does not establish profitability. No parameter was tuned again
 - **Files/lines:** `mapi/data/frequency.py:27-35`; `mapi/weights.py:51-55`; `mapi/scoring.py:176-181,276-303`; `mapi/models.py:245,296-322`; `.github/workflows/ci.yml:16,31-40`; `tests/test_regime_frequency_realization.py:72-84`; `tests/test_confidence.py:173-196`; `tests/test_config_validation.py:93-120`.
 - **Regression:** interval-range classification distinguishes four frequencies; zero regime confidence produces a neutral regime multiplier without zeroing component weight; zero reliability adds no coverage or confirmation; output contains canonical `active_event_ic`.
 - **Before/after:** regime effects interpolate toward neutral by confidence, reliable component weight defines coverage capacity, and the selected-event correlation name states its evaluation universe.
-- **Compatibility:** `information_coefficient` remains a warning-labeled alias. Weekly/monthly inputs can now fail daily expectations. Implementation commit `8e5cf4398e3e8d6341071a8eed71ae8032c647e8` is cross-version verified by the completed green Python 3.12/3.13 CI matrix.
+- **Compatibility:** `information_coefficient` remains a warning-labeled alias. Weekly/monthly inputs can now fail daily expectations. Current cross-version verification is recorded with the applicable implementation revision in sections 28 and 31.
 - **Uncertainty:** interval buckets remain calendar-agnostic, regime confidence is heuristic, and selected-event IC remains selection-conditioned.
 
 ## 23. Regime-confidence multiplication
@@ -241,18 +241,73 @@ This source audit does not establish profitability. No parameter was tuned again
 - **Confirmed:** direct `run_event_study` defaults remained intentionally permissive, but the difference from CLI evidence gates was not prominent and no protected programmatic helper existed.
 - **Files/lines:** `mapi/research/backtest.py:315-350`; `mapi/research/__init__.py:1-22`; `README.md:58-62`; `docs/execution_semantics.md:26-32`; `tests/test_backtest.py:283-315`.
 - **Regression test:** `test_configured_event_study_applies_cli_evidence_policy`.
-- **Before/after:** direct calls retain compatibility defaults; `run_configured_event_study` applies configured horizon, score, forecast direction, costs, bootstrap, confidence, data quality, and frequency policy.
-- **Compatibility:** existing callers are unchanged. Programmatic callers seeking CLI-equivalent protections must migrate explicitly to the new helper or pass all gates themselves.
+- **Before/after:** direct calls retain compatibility defaults; `run_configured_event_study` applies CLI-equivalent event eligibility and configured horizon, score, forecast direction, costs, bootstrap, confidence, data quality, and frequency policy. It does not construct the CLI chronological split.
+- **Compatibility:** existing callers are unchanged. Programmatic callers seeking CLI-equivalent eligibility must migrate explicitly to the new helper or pass all gates themselves, and must pass `evaluation_mask` for holdout-only evaluation.
 - **Uncertainty:** the helper enforces configuration consistency but cannot determine whether configured quality thresholds are empirically appropriate.
 
 ## 28. v0.3.1 identity
 
 - **Confirmed:** regime weighting, forecast mappings, explanation fields, and event metadata materially changed behavior and serialization after r2.
 - **Files/lines:** `mapi/version.py:3-5`; `pyproject.toml:3`; `configs/mapi_v0_3.yaml:1`; `mapi/models.py:129-133,263-271`; `tests/test_edge_cases.py:58-91`; `tests/test_scoring.py:17-35`.
-- **Regression tests:** `test_json_output_contains_v031_schema`; `test_scores_are_bounded_and_serializable`; `test_legacy_public_score_selector_does_not_relabel_algorithm`.
+- **Regression tests:** the historical r3 schema check is superseded by `test_json_output_contains_v032_schema`; `test_scores_are_bounded_and_serializable`; `test_legacy_public_score_selector_does_not_relabel_algorithm`.
 - **Before/after:** package implementation is `0.3.1`, algorithm revision is `mapi_v0.3_source_audit_r3`, and data contract is `mapi_signal_v0.3.1`; config fingerprint remains distinct.
 - **Compatibility:** consumers validating exact versions or schemas must accept the new identifiers and fields. Legacy YAML `signal_version` input still cannot relabel actual output.
 - **Uncertainty:** r3 implementation commit `1433fe1d7c811a0cf6e0be8a22a6e7395e2626e5` completed the green Python 3.12/3.13 matrix in GitHub Actions run `29638531915`; future dependency and platform changes remain outside that evidence.
+
+## 29. Momentum subtype direction semantics
+
+- **Confirmed:** momentum emitted the generic `hypothesized_forward_direction` string for new-high reversal, new-low reversal, timescale-continuation, and aligned/no-view rows.
+- **Files/lines:** `mapi/components/momentum_disagreement.py:61-103,146-154`; `tests/test_components.py:54-96`.
+- **Regression test:** `test_momentum_divergence_maps_new_high_bearish_and_new_low_bullish` verifies bearish new-high and bullish new-low reversal semantics and directional capacity.
+- **Before/after:** every row now identifies bearish new-high reversal, bullish new-low reversal, short-term-momentum continuation, or direction-neutral alignment. The forecast-direction value remains separate from the semantic category.
+- **Compatibility:** serialized momentum semantics change from one generic value to subtype-specific values. Consumers grouping the old string must accept the new categories.
+- **Uncertainty:** reversal and continuation labels remain hypotheses; their predictive validity is not established and no threshold was fit to the holdout period.
+
+## 30. Price-volume subtype direction semantics
+
+- **Confirmed:** every price-volume subtype inherited unconditional continuation from observed pressure, including weak-volume breakouts and directionless high-volume flat-price anomalies.
+- **Files/lines:** `mapi/components/price_volume.py:72-142,151-219`; `tests/test_components.py:98-160`.
+- **Regression test:** `test_price_volume_subtypes_define_distinct_direction_contracts` covers weak-volume breakout, high-volume flat price, bullish/bearish low-volume moves, and bullish/bearish directional-flow mismatch.
+- **Before/after:** weak-volume upside breakouts and low-volume large moves use explicit reversal hypotheses; directional-flow mismatch follows the opposing flow as a reversal hypothesis; high-volume flat price has no directional view. `anomaly_subtype` is included in component metrics.
+- **Compatibility:** price-volume forecast direction, event side, semantic strings, and metrics can change materially. Intensity features and thresholds were not tuned against the holdout period.
+- **Uncertainty:** these structural mappings are heuristic; close-location-weighted volume is not signed trade flow and reversal behavior is not guaranteed.
+
+## 31. Aggregate no-view direction semantics
+
+- **Confirmed:** a component with `forecast_direction=0` still entered the direction denominator and diluted directional components, conflating no view with evidence for a near-zero return.
+- **Files/lines:** `mapi/components/base.py:35-100`; `mapi/models.py:39-100`; `mapi/scoring.py:197-286,406-466`; `mapi/explainability.py:61-86`; `tests/test_scoring.py:15-54,176-205`.
+- **Regression tests:** `test_no_view_component_does_not_dilute_bullish_direction`; `test_opposing_directional_components_cancel`.
+- **Before/after:** components expose `directional_evidence_strength`. The aggregate uses `directional_alert_i = alert_i * directional_evidence_strength_i` in both the weighted numerator and denominator. No-view evidence has capacity zero and does not dilute a bullish view; equal opposing directional evidence cancels.
+- **Compatibility:** aggregate forecast direction and selected long/short events can change. Legacy plugins missing the field infer capacity from nonzero forecast direction and emit a deterministic compatibility warning. MAPI does not currently model explicit evidence for a near-zero future return.
+- **Uncertainty:** directional capacity is categorical for current built-in components, and the recurrence-adjusted alert remains a heuristic aggregation weight.
+
+## 32. Per-component contract enforcement
+
+- **Confirmed:** the prior test pooled all semantic values, so one component with several categories could mask another component that emitted only a generic label.
+- **Files/lines:** `tests/test_components.py:172-249`; `mapi/components/stock_sector.py:73-86,143-151`; `mapi/components/market_regime.py:58-65,114-122`; `mapi/components/volatility.py:65-80,115-123`.
+- **Regression test:** `test_enabled_components_define_explicit_direction_contracts` checks each component against its own allowed semantic set, rejects generic/deprecated labels, bounds directional capacity, and requires neutral categories to have zero capacity.
+- **Before/after:** contract coverage is now component-local and cannot be satisfied by categories emitted by another component.
+- **Compatibility:** future built-in semantic additions require an intentional test update. External legacy plugins still use the warning-bearing fallback.
+- **Uncertainty:** an allowlist proves explicitness and determinism, not whether a hypothesis is economically correct.
+
+## 33. Configured API scope and CI attribution
+
+- **Confirmed:** documentation could be read as though `run_configured_event_study` created the CLI holdout split, and section 22 attributed current verification to the obsolete r1 implementation commit.
+- **Files/lines:** `mapi/research/backtest.py:315-355`; `README.md:58-64`; `docs/execution_semantics.md:26`; `docs/audit_report.md:194-201,238-246`; `tests/test_backtest.py:283-353`.
+- **Regression tests:** `test_configured_event_study_applies_cli_evidence_policy`; `test_configured_event_study_uses_caller_supplied_evaluation_mask`.
+- **Before/after:** the helper is consistently described as applying CLI-equivalent event eligibility/configuration policy, while callers remain responsible for supplying `evaluation_mask`. The stale section-22 commit attribution now refers to revision-specific verification sections.
+- **Compatibility:** runtime API behavior is unchanged; this is a scope clarification plus an explicit-mask regression.
+- **Uncertainty:** a supplied mask enforces an evaluation universe but does not establish that a particular chronological split is statistically sufficient.
+
+## 34. v0.3.2 identity and verification
+
+- **Confirmed:** subtype semantics, serialized directional capacity, and aggregate forecast-direction behavior materially change r3 behavior and the v0.3.1 data contract.
+- **Files/lines:** `mapi/version.py:3-5`; `pyproject.toml:3`; `configs/mapi_v0_3.yaml:1`; `mapi/models.py:39-100`; `mapi/scoring.py:197-286,406-477`; `tests/test_scoring.py:58-76,176-205`.
+- **Regression tests:** `test_json_output_contains_v032_schema`, version/schema assertions in `test_scores_are_bounded_and_serializable`, plus the component and aggregate direction tests in sections 29-32.
+- **Before/after:** implementation is `0.3.2`, algorithm revision is `mapi_v0.3_source_audit_r4`, and data contract is `mapi_signal_v0.3.2`.
+- **Compatibility:** exact-version and schema consumers must accept the new identifiers and `directional_evidence_strength`; `mapi_direction_semantics` now names the no-view-excluding aggregate formula.
+- **Verification:** local Python 3.13 completed `unittest` 91/91, `pytest` 91 plus 40 subtests, CLI end-to-end 1/1, and configuration validation 7/7. The Python 3.12/3.13 CI matrix must still be green for the final implementation commit before r4 can be described as cross-version verified.
+- **Uncertainty:** local and CI tests cover the declared contracts but do not demonstrate profitability, out-of-sample edge, or correctness under future dependency changes.
 
 ## Remaining system-level limits
 

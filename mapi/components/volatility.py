@@ -118,6 +118,7 @@ class VolatilityAnomaly:
                 "direction": forecast_direction,
                 "forecast_direction": forecast_direction,
                 "observed_pressure": observed_pressure,
+                "directional_evidence_strength": 0.0,
                 "direction_semantics": direction_semantics,
                 "direction_contract_warning": None,
                 "confidence": confidence,

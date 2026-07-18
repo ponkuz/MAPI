@@ -53,7 +53,7 @@ def dominant_alert_anomalies(
 
 
 def dominant_anomalies(components: list[ComponentSignal], limit: int = 3) -> list[str]:
-    """Compatibility alias for intensity-ranked explanations in v0.3.1."""
+    """Compatibility alias for intensity-ranked explanations in v0.3.2."""
 
     return dominant_intensity_anomalies(components, limit)
 
@@ -66,6 +66,9 @@ def machine_reasons(components: list[ComponentSignal]) -> list[dict[str, object]
             "strength": round(component.anomaly_strength, 4),
             "direction": round(component.direction, 4),
             "observed_pressure": round(component.observed_pressure, 4),
+            "directional_evidence_strength": round(
+                component.directional_evidence_strength, 4
+            ),
             "direction_semantics": component.direction_semantics,
             "direction_contract_warning": component.direction_contract_warning,
             "confidence": round(component.confidence, 4),

@@ -57,7 +57,7 @@ class EdgeCaseTests(unittest.TestCase):
         self.assertEqual(normalized.index[0].hour, 21)
         self.assertEqual(normalized.index[1].hour, 20)
 
-    def test_json_output_contains_v031_schema(self) -> None:
+    def test_json_output_contains_v032_schema(self) -> None:
         payload = calculate_latest_mapi(
             "TEST", make_ohlcv(100), config=small_config(include_cross_asset=False)
         )["mapi_short_term"]
@@ -94,6 +94,12 @@ class EdgeCaseTests(unittest.TestCase):
             "config_fingerprint",
         }
         self.assertTrue(required.issubset(payload))
+        self.assertTrue(
+            all(
+                "directional_evidence_strength" in component
+                for component in payload["anomaly_components"]
+            )
+        )
         json.dumps(payload, allow_nan=False)
 
 

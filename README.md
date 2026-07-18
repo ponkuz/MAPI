@@ -1,6 +1,6 @@
 # Stock AI Scout: Market Anomaly Pressure Index
 
-MAPI is an experimental, modular stock-market anomaly signal. Version 0.3.1 separates pure anomaly intensity (`mapi_intensity_score`, 0-100), recurrence retention (`mapi_novelty_score`, 0-100), recurrence-adjusted alerting (`mapi_alert_score`, 0-100), realization-adjusted opportunity (`mapi_actionability_score`, 0-100), forecast direction (`mapi_forecast_direction`, -1 to 1), observed pressure, and evidence quality. It is a research instrument, not a profitability claim or trading recommendation.
+MAPI is an experimental, modular stock-market anomaly signal. Version 0.3.2 separates pure anomaly intensity (`mapi_intensity_score`, 0-100), recurrence retention (`mapi_novelty_score`, 0-100), recurrence-adjusted alerting (`mapi_alert_score`, 0-100), realization-adjusted opportunity (`mapi_actionability_score`, 0-100), forecast direction (`mapi_forecast_direction`, -1 to 1), observed pressure, and evidence quality. It is a research instrument, not a profitability claim or trading recommendation.
 
 This workspace did not contain an existing Stock AI Scout codebase or git history, so the implementation is a standalone Python package with explicit provider interfaces. It can be integrated behind the project's eventual data and signal APIs without coupling the indicator to a vendor.
 
@@ -23,13 +23,15 @@ novelty_i   = historical_extremeness_i * (1 - near_identical_recurrence_i)
 intensity_i = strength_i * confidence_i * weight_i * redundancy_penalty_i
 alert_i     = intensity_i * novelty_i
 capacity_i  = confidence_i * weight_i * redundancy_penalty_i
+directional_alert_i = alert_i * directional_evidence_strength_i
 intensity_score = 100 * sum(intensity_i) / sum(capacity_i)
 novelty_score   = 100 * sum(alert_i) / sum(intensity_i)
 alert_score     = 100 * sum(alert_i) / sum(capacity_i)
+forecast_direction = sum(forecast_direction_i * directional_alert_i) / sum(directional_alert_i)
 actionability_score = alert_score * (1 - directional_realization_penalty * directional_realization_score)
 ```
 
-`mapi_raw_score` is a compatibility alias for intensity. `mapi_score` is selected by `score_semantics`; the v0.3.1 default is intensity. Anomaly state, age, trend, persistence, and confirmation use intensity and therefore are not invalidated solely by recurrence. `dominant_intensity_anomalies` explains that state, while `dominant_alert_anomalies` contains only novelty-retaining contributors; legacy `dominant_anomalies` aliases intensity reasons. `mapi_direction` aliases the explicit forecast-direction aggregate; `mapi_observed_pressure` remains separate. Each enabled component declares whether its forecast is continuation, reversal, conditional, or direction-neutral. `recent_move_extremeness` is descriptive only. `directional_realization_score` is positive only when movement since `anomaly_first_detected_at` aligns with forecast direction. Old YAML files may select legacy public-score behavior, but they cannot relabel the implementation as an older algorithm revision. Output includes implementation, algorithm, data-contract, and config-fingerprint identifiers.
+`mapi_raw_score` is a compatibility alias for intensity. `mapi_score` is selected by `score_semantics`; the v0.3.2 default is intensity. Anomaly state, age, trend, persistence, and confirmation use intensity and therefore are not invalidated solely by recurrence. `dominant_intensity_anomalies` explains that state, while `dominant_alert_anomalies` contains only novelty-retaining contributors; legacy `dominant_anomalies` aliases intensity reasons. `mapi_direction` aliases the explicit forecast-direction aggregate; `mapi_observed_pressure` remains separate. Each enabled component declares a deterministic subtype semantic and `directional_evidence_strength`. A value of zero means no directional view, so that component does not enter the direction denominator but still contributes to anomaly intensity and alerting. MAPI v0.3.2 does not model positive evidence for a near-zero future return as a separate forecast class. `recent_move_extremeness` is descriptive only. `directional_realization_score` is positive only when movement since `anomaly_first_detected_at` aligns with forecast direction. Old YAML files may select legacy public-score behavior, but they cannot relabel the implementation as an older algorithm revision. Output includes implementation, algorithm, data-contract, and config-fingerprint identifiers.
 
 ## Data flow
 
@@ -59,7 +61,7 @@ python examples\run_backtest.py --symbol AAPL --prices data\AAPL.csv --sector da
 
 The event-study CLI uses `research_score_column` from configuration (`mapi_actionability_score` by default). Override it with `--score-column`; JSON records the score and direction columns. One chronological split is created for the entire report. All metrics use the test mask, while baseline and ablation thresholds are fitted only on the fit mask. Configured confidence, data-quality, and frequency-compatibility gates apply to both matching and event selection.
 
-For backward compatibility, direct `run_event_study()` calls remain permissive unless evidence gates are passed explicitly. Programmatic users who want the CLI policy should call `run_configured_event_study(signals, prices, config, horizon_name, ...)`; it applies the configured score column, horizon, costs, confidence, quality, frequency, bootstrap, and forecast-direction settings.
+For backward compatibility, direct `run_event_study()` calls remain permissive unless evidence gates are passed explicitly. `run_configured_event_study(signals, prices, config, horizon_name, ...)` applies the CLI-equivalent event eligibility and configured score, horizon, cost, bootstrap, quality, frequency, and forecast-direction policy. It does not create the CLI chronological holdout split; programmatic callers must pass `evaluation_mask` for holdout-only evaluation.
 
 Programmatic use:
 

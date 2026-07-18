@@ -13,6 +13,47 @@ from mapi.version import ALGORITHM_REVISION, DATA_CONTRACT_VERSION
 from tests.helpers import make_ohlcv, small_config
 
 
+class _FixedDirectionComponent:
+    family = "test"
+
+    def __init__(
+        self,
+        name: str,
+        forecast_direction: float,
+        directional_evidence_strength: float,
+        semantics: str,
+    ) -> None:
+        self.name = name
+        self.forecast_direction = forecast_direction
+        self.directional_evidence_strength = directional_evidence_strength
+        self.semantics = semantics
+
+    def calculate(
+        self,
+        price_frame: pd.DataFrame,
+        context: ComponentContext,
+        horizon: HorizonConfig,
+        config: MapiConfig,
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "anomaly_strength": 1.0,
+                "forecast_direction": self.forecast_direction,
+                "observed_pressure": self.forecast_direction,
+                "directional_evidence_strength": self.directional_evidence_strength,
+                "direction_semantics": self.semantics,
+                "direction_contract_warning": None,
+                "confidence": 1.0,
+                "novelty": 1.0,
+                "historical_extremeness": 1.0,
+                "recurrence_rate": 0.0,
+                "reason": self.name,
+                "metrics": [{} for _ in range(len(price_frame))],
+            },
+            index=price_frame.index,
+        )
+
+
 class ScoringTests(unittest.TestCase):
     def test_scores_are_bounded_and_serializable(self) -> None:
         prices = make_ohlcv(120)
@@ -131,6 +172,59 @@ class ScoringTests(unittest.TestCase):
             latest["dominant_intensity_anomalies"],
         )
         self.assertIn("no longer novel", latest["human_summary"])
+
+    def test_no_view_component_does_not_dilute_bullish_direction(self) -> None:
+        bullish = _FixedDirectionComponent(
+            "bullish", 1.0, 1.0, "continuation_hypothesis_test_bullish"
+        )
+        no_view = _FixedDirectionComponent(
+            "no_view", 0.0, 0.0, "direction_neutral_test_no_view"
+        )
+        frame = self._score_fixed_components([bullish, no_view])
+        latest = frame.iloc[-1]
+        self.assertAlmostEqual(float(latest["mapi_forecast_direction"]), 1.0)
+        self.assertEqual(
+            latest["mapi_direction_semantics"],
+            "weighted_component_forecast_direction_excluding_no_view",
+        )
+        serialized = latest["signal"].to_dict()["anomaly_components"]
+        self.assertEqual(serialized[0]["directional_evidence_strength"], 1.0)
+        self.assertEqual(serialized[1]["directional_evidence_strength"], 0.0)
+
+    def test_opposing_directional_components_cancel(self) -> None:
+        bullish = _FixedDirectionComponent(
+            "bullish", 1.0, 1.0, "continuation_hypothesis_test_bullish"
+        )
+        bearish = _FixedDirectionComponent(
+            "bearish", -1.0, 1.0, "continuation_hypothesis_test_bearish"
+        )
+        frame = self._score_fixed_components([bullish, bearish])
+        self.assertAlmostEqual(
+            float(frame["mapi_forecast_direction"].iloc[-1]), 0.0
+        )
+
+    def _score_fixed_components(
+        self, components: list[_FixedDirectionComponent]
+    ) -> pd.DataFrame:
+        config = MapiConfig()
+        config.enabled_components = [component.name for component in components]
+        config.component_weights = {component.name: 1.0 for component in components}
+        config.component_reliability = {
+            component.name: 1.0 for component in components
+        }
+        config.horizons = {
+            "test": HorizonConfig(
+                "test", 1, 12, 4, expected_frequency="daily"
+            )
+        }
+        config.redundancy_window = 10
+        config.redundancy_min_periods = 4
+        return calculate_mapi(
+            "TEST",
+            make_ohlcv(30, seed=58),
+            config=config,
+            components=components,
+        )["test"]
 
 
 if __name__ == "__main__":

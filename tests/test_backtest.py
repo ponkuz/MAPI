@@ -313,6 +313,47 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(configured.sample_count, 0)
         self.assertGreater(configured.excluded_frequency_mismatch_count, 0)
 
+    def test_configured_event_study_uses_caller_supplied_evaluation_mask(self) -> None:
+        signals = pd.DataFrame(
+            {
+                "mapi_actionability_score": 100.0,
+                "mapi_direction": 1.0,
+                "mapi_forecast_direction": 1.0,
+                "mapi_confidence": 1.0,
+                "data_quality_score": 1.0,
+                "horizon_frequency_compatible": True,
+            },
+            index=self.prices.index,
+        )
+        config = MapiConfig()
+        config.horizons = {
+            "test": HorizonConfig(
+                "test", 2, 20, 8, expected_frequency="daily"
+            )
+        }
+        config.bootstrap_samples = 50
+        evaluation_mask = pd.Series(False, index=self.prices.index)
+        evaluation_mask.iloc[-20:] = True
+
+        configured = run_configured_event_study(
+            signals,
+            self.prices,
+            config,
+            "test",
+            evaluation_mask=evaluation_mask,
+        )
+
+        self.assertEqual(configured.evaluation_count, 20)
+        self.assertEqual(configured.evaluation_start, self.prices.index[-20])
+        self.assertEqual(configured.evaluation_end, self.prices.index[-1])
+        serialized = configured.to_dict()
+        self.assertEqual(
+            serialized["evaluation_start"], self.prices.index[-20].isoformat()
+        )
+        self.assertEqual(
+            serialized["evaluation_end"], self.prices.index[-1].isoformat()
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
