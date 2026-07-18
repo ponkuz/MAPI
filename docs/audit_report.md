@@ -306,7 +306,7 @@ This source audit does not establish profitability. No parameter was tuned again
 - **Regression tests:** `test_json_output_contains_v032_schema`, version/schema assertions in `test_scores_are_bounded_and_serializable`, plus the component and aggregate direction tests in sections 29-32.
 - **Before/after:** implementation is `0.3.2`, algorithm revision is `mapi_v0.3_source_audit_r4`, and data contract is `mapi_signal_v0.3.2`.
 - **Compatibility:** exact-version and schema consumers must accept the new identifiers and `directional_evidence_strength`; `mapi_direction_semantics` now names the no-view-excluding aggregate formula.
-- **Verification:** local Python 3.13 completed `unittest` 91/91, `pytest` 91 plus 40 subtests, CLI end-to-end 1/1, and configuration validation 7/7. The Python 3.12/3.13 CI matrix must still be green for the final implementation commit before r4 can be described as cross-version verified.
+- **Verification:** local Python 3.13 completed `unittest` 91/91, `pytest` 91 plus 40 subtests, CLI end-to-end 1/1, and configuration validation 7/7. Implementation commit `081f68a856f6c6ce17cdad01aa00e0122e1420a0` completed the green Python 3.12/3.13 matrix, including `unittest`, `pytest`, both CLI paths, and configuration validation, in GitHub Actions run `29644871013`.
 - **Uncertainty:** local and CI tests cover the declared contracts but do not demonstrate profitability, out-of-sample edge, or correctness under future dependency changes.
 
 ## Remaining system-level limits
